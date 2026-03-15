@@ -10,5 +10,19 @@ __pycache__/
 results/
 models/
 
+# Non-code assets and writing artifacts
+*.pptx
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.tex
+*.cls
+*.synctex.gz
+IEEE-conference-template-062824/
+article.tex
+create_presentation.py
+generate_presentation.py
+
 .DS_Store
 Thumbs.db
