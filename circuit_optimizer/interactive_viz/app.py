@@ -120,6 +120,23 @@ def _build_metrics_table(result: OptimizationResult) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _build_method_comparison_table(result: OptimizationResult) -> pd.DataFrame:
+    """Compare GA-only and Hybrid metrics when both are available."""
+    if result.ga_metrics is None or result.hybrid_metrics is None:
+        return pd.DataFrame()
+
+    ga = result.ga_metrics
+    hy = result.hybrid_metrics
+    return pd.DataFrame(
+        [
+            {"Metric": "Total gates", "GA": ga["total_gates"], "Hybrid": hy["total_gates"]},
+            {"Metric": "Depth", "GA": ga["depth"], "Hybrid": hy["depth"]},
+            {"Metric": "CX gates", "GA": ga["cx_count"], "Hybrid": hy["cx_count"]},
+            {"Metric": "Cost", "GA": round(ga["cost"], 4), "Hybrid": round(hy["cost"], 4)},
+        ]
+    )
+
+
 def main() -> None:
     defaults = _launch_defaults()
     resolved_model_path, cloud_model_message = _resolve_default_model_path(defaults.model_path)
@@ -182,6 +199,26 @@ def main() -> None:
 
     st.subheader("Metrics")
     st.dataframe(_build_metrics_table(result), use_container_width=True)
+
+    if result.ga_metrics is not None and result.hybrid_metrics is not None:
+        st.subheader("GA vs Hybrid")
+        ga_cost = result.ga_metrics["cost"]
+        hybrid_cost = result.hybrid_metrics["cost"]
+        delta_cost = ga_cost - hybrid_cost
+
+        cmp_cols = st.columns(3)
+        cmp_cols[0].metric("GA cost", f"{ga_cost:.4f}")
+        cmp_cols[1].metric("Hybrid cost", f"{hybrid_cost:.4f}")
+        cmp_cols[2].metric("Hybrid gain vs GA", f"{delta_cost:.4f}")
+
+        if delta_cost > 0:
+            st.success("Hybrid achieved lower cost than GA-only on this run.")
+        elif delta_cost == 0:
+            st.info("GA-only and Hybrid produced the same cost on this run.")
+        else:
+            st.warning("GA-only achieved lower cost than Hybrid on this run.")
+
+        st.dataframe(_build_method_comparison_table(result), use_container_width=True)
 
     img_cols = st.columns(3)
     img_cols[0].image(artifacts["before"], caption=os.path.basename(artifacts["before"]))

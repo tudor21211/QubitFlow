@@ -27,6 +27,12 @@ class OptimizationResult:
     method_used: str
     model_message: str
     equivalence_result: Dict = None
+    ga_circuit: Optional[QuantumCircuit] = None
+    ga_metrics: Optional[Dict] = None
+    ga_equivalence_result: Optional[Dict] = None
+    hybrid_circuit: Optional[QuantumCircuit] = None
+    hybrid_metrics: Optional[Dict] = None
+    hybrid_equivalence_result: Optional[Dict] = None
 
 
 def _try_load_agent(model_path: str) -> tuple[Optional[RLAgent], str]:
@@ -99,25 +105,50 @@ def generate_and_optimize(
     for attempt in range(max_attempts):
         trial_seed = None if seed is None else seed + attempt
         original = random_redundant_circuit(n_qubits=n_qubits, depth=depth, seed=trial_seed)
+        original_metrics = circuit_metrics(original)
 
         if rl_agent is not None and rl_agent.model is not None:
-            optimized = _run_hybrid(
+            ga_optimized = _run_ga(
+                base_circuit=original,
+                ga_generations=ga_generations,
+                ga_pop_size=ga_pop_size,
+            )
+            hybrid_optimized = _run_hybrid(
                 base_circuit=original,
                 rl_agent=rl_agent,
                 ga_generations=ga_generations,
                 ga_pop_size=ga_pop_size,
             )
-            method_used = "Hybrid (GA+RL)"
+
+            ga_metrics = circuit_metrics(ga_optimized)
+            hybrid_metrics = circuit_metrics(hybrid_optimized)
+
+            if hybrid_metrics["cost"] <= ga_metrics["cost"]:
+                optimized = hybrid_optimized
+                optimized_metrics = hybrid_metrics
+                method_used = "Hybrid (GA+RL)"
+            else:
+                optimized = ga_optimized
+                optimized_metrics = ga_metrics
+                method_used = "GA"
+
+            ga_equivalence = check_equivalence(original, ga_optimized)
+            hybrid_equivalence = check_equivalence(original, hybrid_optimized)
         else:
             optimized = _run_ga(
                 base_circuit=original,
                 ga_generations=ga_generations,
                 ga_pop_size=ga_pop_size,
             )
+            optimized_metrics = circuit_metrics(optimized)
             method_used = "GA"
+            ga_optimized = optimized
+            ga_metrics = optimized_metrics
+            ga_equivalence = check_equivalence(original, optimized)
+            hybrid_optimized = None
+            hybrid_metrics = None
+            hybrid_equivalence = None
 
-        original_metrics = circuit_metrics(original)
-        optimized_metrics = circuit_metrics(optimized)
         gate_delta = optimized_metrics["total_gates"] - original_metrics["total_gates"]
 
         current = OptimizationResult(
@@ -128,6 +159,12 @@ def generate_and_optimize(
             method_used=method_used,
             model_message=model_message,
             equivalence_result=check_equivalence(original, optimized),
+            ga_circuit=ga_optimized,
+            ga_metrics=ga_metrics,
+            ga_equivalence_result=ga_equivalence,
+            hybrid_circuit=hybrid_optimized,
+            hybrid_metrics=hybrid_metrics,
+            hybrid_equivalence_result=hybrid_equivalence,
         )
 
         if gate_delta < best_gate_delta:
