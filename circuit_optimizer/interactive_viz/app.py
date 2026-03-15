@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import tempfile
+import urllib.request
 from typing import Optional
 
 import pandas as pd
@@ -18,6 +20,58 @@ if PROJECT_ROOT not in sys.path:
 
 from circuit_optimizer.interactive_viz.plotting import save_artifacts
 from circuit_optimizer.interactive_viz.runner import OptimizationResult, generate_and_optimize
+
+
+def _secret_value(*keys: str) -> Optional[str]:
+    """Return the first matching non-empty secret value from common key styles."""
+    for key in keys:
+        if key in st.secrets:
+            value = st.secrets[key]
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    model_section = st.secrets.get("model")
+    if isinstance(model_section, dict):
+        for key in keys:
+            if key in model_section:
+                value = model_section[key]
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    return None
+
+
+@st.cache_data(show_spinner=False)
+def _download_cloud_model(model_url: str, auth_header: Optional[str], auth_token: Optional[str]) -> str:
+    """Download model zip to temp storage and return SB3 base model path."""
+    model_dir = os.path.join(tempfile.gettempdir(), "qubitflow_models")
+    os.makedirs(model_dir, exist_ok=True)
+    model_base = os.path.join(model_dir, "rl_agent")
+    model_zip = model_base + ".zip"
+
+    req = urllib.request.Request(model_url)
+    if auth_token:
+        req.add_header(auth_header or "Authorization", f"Bearer {auth_token}")
+
+    with urllib.request.urlopen(req, timeout=120) as response, open(model_zip, "wb") as out:
+        out.write(response.read())
+
+    return model_base
+
+
+def _resolve_default_model_path(local_default: str) -> tuple[str, Optional[str]]:
+    """Resolve model path, preferring cloud-secret model URL if available."""
+    model_url = _secret_value("RL_MODEL_URL", "rl_model_url", "url")
+    if not model_url:
+        return local_default, None
+
+    auth_header = _secret_value("RL_MODEL_AUTH_HEADER", "rl_model_auth_header", "auth_header")
+    auth_token = _secret_value("RL_MODEL_AUTH_TOKEN", "rl_model_auth_token", "auth_token")
+
+    try:
+        cloud_path = _download_cloud_model(model_url, auth_header, auth_token)
+        return cloud_path, "Loaded RL model from cloud secret URL."
+    except Exception as exc:
+        return local_default, f"Cloud model download failed: {exc}. Using local model path setting."
 
 
 def _launch_defaults() -> argparse.Namespace:
@@ -68,6 +122,7 @@ def _build_metrics_table(result: OptimizationResult) -> pd.DataFrame:
 
 def main() -> None:
     defaults = _launch_defaults()
+    resolved_model_path, cloud_model_message = _resolve_default_model_path(defaults.model_path)
 
     st.set_page_config(page_title="Circuit Optimizer Visualizer", layout="wide")
     st.title("Circuit Optimizer Visualizer")
@@ -87,7 +142,9 @@ def main() -> None:
     st.sidebar.header("Optimizer Setup")
     ga_generations = st.sidebar.slider("GA generations", min_value=5, max_value=100, value=defaults.ga_gens)
     ga_pop_size = st.sidebar.slider("GA population", min_value=8, max_value=80, value=defaults.ga_pop)
-    model_path = st.sidebar.text_input("RL model path", value=defaults.model_path)
+    model_path = st.sidebar.text_input("RL model path", value=resolved_model_path)
+    if cloud_model_message:
+        st.sidebar.caption(cloud_model_message)
 
     run_clicked = st.button("Generate and Optimize", type="primary")
     if not run_clicked:
