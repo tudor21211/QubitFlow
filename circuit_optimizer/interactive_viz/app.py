@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from typing import Optional
 
 import pandas as pd
 import streamlit as st
+
+# Streamlit Cloud may execute this file with the app folder as the import base.
+# Ensure repository root is in sys.path so `circuit_optimizer` is importable.
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from circuit_optimizer.interactive_viz.plotting import save_artifacts
 from circuit_optimizer.interactive_viz.runner import OptimizationResult, generate_and_optimize
