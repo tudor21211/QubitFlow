@@ -122,11 +122,13 @@ def _build_metrics_table(result: OptimizationResult) -> pd.DataFrame:
 
 def _build_method_comparison_table(result: OptimizationResult) -> pd.DataFrame:
     """Compare GA-only and Hybrid metrics when both are available."""
-    if result.ga_metrics is None or result.hybrid_metrics is None:
+    ga_metrics = getattr(result, "ga_metrics", None)
+    hybrid_metrics = getattr(result, "hybrid_metrics", None)
+    if ga_metrics is None or hybrid_metrics is None:
         return pd.DataFrame()
 
-    ga = result.ga_metrics
-    hy = result.hybrid_metrics
+    ga = ga_metrics
+    hy = hybrid_metrics
     return pd.DataFrame(
         [
             {"Metric": "Total gates", "GA": ga["total_gates"], "Hybrid": hy["total_gates"]},
@@ -200,10 +202,12 @@ def main() -> None:
     st.subheader("Metrics")
     st.dataframe(_build_metrics_table(result), use_container_width=True)
 
-    if result.ga_metrics is not None and result.hybrid_metrics is not None:
+    ga_metrics = getattr(result, "ga_metrics", None)
+    hybrid_metrics = getattr(result, "hybrid_metrics", None)
+    if ga_metrics is not None and hybrid_metrics is not None:
         st.subheader("GA vs Hybrid")
-        ga_cost = result.ga_metrics["cost"]
-        hybrid_cost = result.hybrid_metrics["cost"]
+        ga_cost = ga_metrics["cost"]
+        hybrid_cost = hybrid_metrics["cost"]
         delta_cost = ga_cost - hybrid_cost
 
         cmp_cols = st.columns(3)
