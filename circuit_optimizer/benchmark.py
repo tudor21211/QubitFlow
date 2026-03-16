@@ -18,7 +18,7 @@ from qiskit import QuantumCircuit
 
 import config
 from circuit_optimizer.baseline import transpile_baseline
-from circuit_optimizer.cost import circuit_cost, circuit_metrics
+from circuit_optimizer.cost import circuit_cost, circuit_metrics, circuit_objectives
 from circuit_optimizer.genetic_algorithm import GeneticAlgorithm
 from circuit_optimizer.hybrid_optimizer import HybridOptimizer
 from circuit_optimizer.rl_agent import RLAgent
@@ -42,6 +42,7 @@ def benchmark_single(
 
     # ── 1. Original ────────────────────────────────────────────
     orig_metrics = circuit_metrics(qc)
+    orig_metrics["objectives"] = circuit_objectives(qc)
     results["original"] = orig_metrics
     if verbose:
         print(f"\n{'='*60}")
@@ -55,6 +56,7 @@ def benchmark_single(
     base_qc = transpile_baseline(qc, optimization_level=3)
     base_time = time.time() - t0
     base_m = circuit_metrics(base_qc)
+    base_m["objectives"] = circuit_objectives(base_qc)
     base_m["time_s"] = base_time
     base_m["equivalence"] = check_equivalence(qc, base_qc)
     results["baseline"] = base_m
@@ -89,9 +91,12 @@ def benchmark_single(
             best_ga_qc = ga_qc
 
     ga_m = circuit_metrics(best_ga_qc)
+    ga_m["objectives"] = circuit_objectives(best_ga_qc)
     ga_m["avg_cost"] = float(np.mean(ga_costs))
     ga_m["std_cost"] = float(np.std(ga_costs))
     ga_m["avg_time_s"] = float(np.mean(ga_times))
+    ga_m["runs_cost"] = [float(x) for x in ga_costs]
+    ga_m["runs_time_s"] = [float(x) for x in ga_times]
     ga_m["equivalence"] = check_equivalence(qc, best_ga_qc)
     results["ga"] = ga_m
     if verbose:
@@ -130,9 +135,12 @@ def benchmark_single(
                 best_hybrid_qc = h_qc
 
         hybrid_m = circuit_metrics(best_hybrid_qc)
+        hybrid_m["objectives"] = circuit_objectives(best_hybrid_qc)
         hybrid_m["avg_cost"] = float(np.mean(hybrid_costs))
         hybrid_m["std_cost"] = float(np.std(hybrid_costs))
         hybrid_m["avg_time_s"] = float(np.mean(hybrid_times))
+        hybrid_m["runs_cost"] = [float(x) for x in hybrid_costs]
+        hybrid_m["runs_time_s"] = [float(x) for x in hybrid_times]
         hybrid_m["equivalence"] = check_equivalence(qc, best_hybrid_qc)
         results["hybrid"] = hybrid_m
         if verbose:
