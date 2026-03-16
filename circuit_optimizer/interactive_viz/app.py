@@ -10,7 +10,7 @@ import os
 import sys
 import tempfile
 import urllib.request
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
@@ -276,6 +276,131 @@ def _build_method_comparison_table(result: OptimizationResult) -> pd.DataFrame:
     )
 
 
+def _init_run_state() -> None:
+    """Initialize session state used for live run telemetry."""
+    if "live_events" not in st.session_state:
+        st.session_state.live_events = []
+    if "live_chart_points" not in st.session_state:
+        st.session_state.live_chart_points = []
+    if "live_attempt" not in st.session_state:
+        st.session_state.live_attempt = 0
+    if "live_max_attempts" not in st.session_state:
+        st.session_state.live_max_attempts = 1
+    if "live_generation" not in st.session_state:
+        st.session_state.live_generation = 0
+    if "live_total_generations" not in st.session_state:
+        st.session_state.live_total_generations = 1
+    if "live_phase" not in st.session_state:
+        st.session_state.live_phase = "idle"
+    if "last_result" not in st.session_state:
+        st.session_state.last_result = None
+    if "last_artifacts" not in st.session_state:
+        st.session_state.last_artifacts = None
+    if "show_activity_details" not in st.session_state:
+        st.session_state.show_activity_details = False
+
+
+def _reset_live_run_state() -> None:
+    """Reset live telemetry buffers before each new optimization run."""
+    st.session_state.live_events = []
+    st.session_state.live_chart_points = []
+    st.session_state.live_attempt = 0
+    st.session_state.live_max_attempts = 1
+    st.session_state.live_generation = 0
+    st.session_state.live_total_generations = 1
+    st.session_state.live_phase = "starting"
+
+
+def _event_line(event: Dict[str, Any]) -> str:
+    """Format one progress event as a compact log line."""
+    ts = event.get("timestamp", "--:--:--")
+    return f"[{ts}] {event.get('message', '')}"
+
+
+def _render_live_activity(
+    attempt_placeholder,
+    generation_placeholder,
+    chart_placeholder,
+    log_placeholder,
+    status_placeholder,
+    running: bool,
+    show_details: bool,
+) -> None:
+    """Render the activity panel from current session-state telemetry."""
+    attempt = int(st.session_state.live_attempt)
+    max_attempts = max(int(st.session_state.live_max_attempts), 1)
+    generation = int(st.session_state.live_generation)
+    total_generations = max(int(st.session_state.live_total_generations), 1)
+    phase = str(st.session_state.live_phase)
+
+    attempt_progress = 0.0
+    if max_attempts > 0:
+        attempt_progress = min(max(attempt / max_attempts, 0.0), 1.0)
+    attempt_placeholder.progress(
+        attempt_progress,
+        text=f"Attempts: {attempt}/{max_attempts}",
+    )
+
+    generation_progress = 0.0
+    if total_generations > 0:
+        generation_progress = min(max(generation / total_generations, 0.0), 1.0)
+    generation_placeholder.progress(
+        generation_progress,
+        text=f"Generation Progress ({phase}): {generation}/{total_generations}",
+    )
+
+    chart_points = st.session_state.live_chart_points
+    if show_details:
+        if chart_points:
+            chart_df = pd.DataFrame(chart_points)
+            chart_df["step"] = chart_df.index + 1
+            chart_placeholder.line_chart(
+                chart_df.set_index("step")[ ["best_cost", "avg_cost"] ],
+                height=220,
+                use_container_width=True,
+            )
+        else:
+            chart_placeholder.info("Convergence chart will populate once GA generations start.")
+    else:
+        chart_placeholder.info("Convergence history is hidden. Click 'Show Logs and Convergence' to view it.")
+
+    lines = [_event_line(event) for event in st.session_state.live_events]
+    if not lines:
+        lines = ["Waiting to start optimization..."]
+
+    if show_details:
+        visible_lines = lines[-600:]
+        rendered_lines = "".join(
+            f"<div style='margin: 0 0 0.15rem 0;'>{html.escape(line)}</div>" for line in visible_lines
+        )
+        log_placeholder.markdown(
+            f"""
+            <div style="
+                max-height: 290px;
+                overflow-y: auto;
+                background: #0f172a;
+                border: 1px solid #1e293b;
+                border-radius: 8px;
+                padding: 0.75rem;
+                color: #e2e8f0;
+                font-size: 0.80rem;
+                font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace;
+                line-height: 1.35;
+            ">
+                {rendered_lines}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        log_placeholder.info("Execution log is hidden. Click 'Show Logs and Convergence' to display it.")
+
+    if running:
+        status_placeholder.info("Optimization in progress. Live events update below.")
+    else:
+        status_placeholder.success("Optimization finished. Log and convergence history are preserved.")
+
+
 def main() -> None:
     defaults = _launch_defaults()
     resolved_model_path, cloud_model_message = _resolve_default_model_path(defaults.model_path)
@@ -303,12 +428,81 @@ def main() -> None:
     if cloud_model_message:
         st.sidebar.caption(cloud_model_message)
 
-    run_clicked = st.button("Generate and Optimize", type="primary")
-    if not run_clicked:
-        st.info("Pick parameters on the left, then click Generate and Optimize.")
-        return
+    _init_run_state()
 
-    with st.spinner("Running optimizer..."):
+    st.subheader("Live Optimization Activity")
+    st.caption(
+        "This panel streams the code path in real time: circuit generation, GA/hybrid phases, and per-generation convergence."
+    )
+    toggle_label = "Hide Logs and Convergence" if st.session_state.show_activity_details else "Show Logs and Convergence"
+    if st.button(toggle_label, key="toggle-live-details"):
+        st.session_state.show_activity_details = not st.session_state.show_activity_details
+
+    pipeline_cols = st.columns(3)
+    pipeline_cols[0].markdown(
+        "**Generate**  \n"
+        "`random_redundant_circuit(...)` creates a new candidate with redundant structure to optimize."
+    )
+    pipeline_cols[1].markdown(
+        "**Optimize**  \n"
+        "`GeneticAlgorithm.run()` evolves rewrite sequences; if RL model is loaded, `HybridOptimizer.run()` is also executed."
+    )
+    pipeline_cols[2].markdown(
+        "**Validate**  \n"
+        "`check_equivalence(...)` verifies that optimized and original circuits implement the same transformation."
+    )
+
+    attempt_progress_placeholder = st.empty()
+    generation_progress_placeholder = st.empty()
+    convergence_chart_placeholder = st.empty()
+    live_log_placeholder = st.empty()
+    live_status_placeholder = st.empty()
+
+    _render_live_activity(
+        attempt_placeholder=attempt_progress_placeholder,
+        generation_placeholder=generation_progress_placeholder,
+        chart_placeholder=convergence_chart_placeholder,
+        log_placeholder=live_log_placeholder,
+        status_placeholder=live_status_placeholder,
+        running=False,
+        show_details=st.session_state.show_activity_details,
+    )
+
+    run_clicked = st.button("Generate and Optimize", type="primary")
+
+    if run_clicked:
+        _reset_live_run_state()
+
+        def _on_progress(event: Dict[str, Any]) -> None:
+            st.session_state.live_events.append(event)
+            st.session_state.live_phase = event.get("phase", st.session_state.live_phase)
+            st.session_state.live_attempt = int(event.get("attempt", st.session_state.live_attempt))
+            st.session_state.live_max_attempts = int(
+                event.get("max_attempts", st.session_state.live_max_attempts)
+            )
+            st.session_state.live_generation = int(event.get("generation", st.session_state.live_generation))
+            st.session_state.live_total_generations = int(
+                event.get("total_generations", st.session_state.live_total_generations)
+            )
+
+            if event.get("event_type") == "generation":
+                st.session_state.live_chart_points.append(
+                    {
+                        "best_cost": float(event.get("best_cost", 0.0)),
+                        "avg_cost": float(event.get("avg_cost", 0.0)),
+                    }
+                )
+
+            _render_live_activity(
+                attempt_placeholder=attempt_progress_placeholder,
+                generation_placeholder=generation_progress_placeholder,
+                chart_placeholder=convergence_chart_placeholder,
+                log_placeholder=live_log_placeholder,
+                status_placeholder=live_status_placeholder,
+                running=True,
+                show_details=st.session_state.show_activity_details,
+            )
+
         result = generate_and_optimize(
             n_qubits=n_qubits,
             depth=depth,
@@ -316,8 +510,40 @@ def main() -> None:
             ga_generations=ga_generations,
             ga_pop_size=ga_pop_size,
             model_path=model_path,
+            progress_callback=_on_progress,
         )
         artifacts = save_artifacts(result)
+
+        st.session_state.last_result = result
+        st.session_state.last_artifacts = artifacts
+
+        if getattr(result, "run_events", None):
+            st.session_state.live_events = list(result.run_events)
+        if getattr(result, "convergence_points", None):
+            st.session_state.live_chart_points = [
+                {
+                    "best_cost": float(point["best_cost"]),
+                    "avg_cost": float(point["avg_cost"]),
+                }
+                for point in result.convergence_points
+            ]
+
+        _render_live_activity(
+            attempt_placeholder=attempt_progress_placeholder,
+            generation_placeholder=generation_progress_placeholder,
+            chart_placeholder=convergence_chart_placeholder,
+            log_placeholder=live_log_placeholder,
+            status_placeholder=live_status_placeholder,
+            running=False,
+            show_details=st.session_state.show_activity_details,
+        )
+
+    result = st.session_state.last_result
+    artifacts = st.session_state.last_artifacts
+
+    if result is None or artifacts is None:
+        st.info("Pick parameters on the left, then click Generate and Optimize.")
+        return
 
     before_gates = result.original_metrics["total_gates"]
     after_gates = result.optimized_metrics["total_gates"]
@@ -339,6 +565,11 @@ def main() -> None:
 
     st.subheader("Metrics")
     st.dataframe(_build_metrics_table(result), use_container_width=True)
+
+    if getattr(result, "attempt_summaries", None):
+        with st.expander("Run Timeline"):
+            attempt_df = pd.DataFrame(result.attempt_summaries)
+            st.dataframe(attempt_df, use_container_width=True)
 
     ga_metrics = getattr(result, "ga_metrics", None)
     hybrid_metrics = getattr(result, "hybrid_metrics", None)
