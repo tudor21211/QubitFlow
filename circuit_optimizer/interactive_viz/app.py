@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import html
+import mimetypes
 import os
 import sys
 import tempfile
@@ -11,6 +14,7 @@ from typing import Optional
 
 import pandas as pd
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 
 # Streamlit Cloud may execute this file with the app folder as the import base.
 # Ensure repository root is in sys.path so `circuit_optimizer` is importable.
@@ -22,21 +26,154 @@ from circuit_optimizer.interactive_viz.plotting import save_artifacts
 from circuit_optimizer.interactive_viz.runner import OptimizationResult, generate_and_optimize
 
 
+def _image_to_data_url(file_path: str) -> str:
+    """Convert a local image file to an inline data URL."""
+    mime, _ = mimetypes.guess_type(file_path)
+    mime = mime or "image/png"
+    with open(file_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("ascii")
+    return f"data:{mime};base64,{b64}"
+
+
+def _render_click_modal_styles() -> None:
+    """Inject CSS for click-to-open centered modal image viewer."""
+    st.markdown(
+        """
+        <style>
+        .modal-trigger {
+            position: relative;
+            text-align: center;
+        }
+        .modal-trigger img {
+            width: 100%;
+            max-height: 230px;
+            object-fit: contain;
+            border-radius: 8px;
+            display: block;
+            cursor: zoom-in;
+            background: #ffffff;
+        }
+        .modal-trigger .cap {
+            font-size: 0.9rem;
+            opacity: 0.85;
+            margin-top: 0.35rem;
+            text-align: center;
+        }
+        .img-modal {
+            position: fixed;
+            inset: 0;
+            opacity: 0;
+            pointer-events: none;
+            background: rgba(10, 12, 18, 0.24);
+            backdrop-filter: blur(7px);
+            -webkit-backdrop-filter: blur(7px);
+            z-index: 9999;
+            transition: opacity 0.15s ease;
+        }
+        .img-modal:target {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .img-modal .modal-inner {
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 3vh 2vw;
+            box-sizing: border-box;
+        }
+        .img-modal img {
+            max-width: min(94vw, 1750px);
+            max-height: 84vh;
+            border-radius: 10px;
+            box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
+            background: #ffffff;
+        }
+        .img-modal .modal-caption {
+            margin-top: 0.5rem;
+            text-align: center;
+            color: #ffffff;
+            font-size: 0.95rem;
+            opacity: 0.92;
+        }
+        .img-modal .close-btn {
+            position: fixed;
+            top: 14px;
+            right: 18px;
+            color: #ffffff;
+            text-decoration: none;
+            font-size: 1.6rem;
+            background: rgba(0, 0, 0, 0.35);
+            border-radius: 8px;
+            padding: 0.12rem 0.5rem;
+            line-height: 1;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_click_modal_image(file_path: str, caption: str, modal_id: str) -> None:
+    """Render image with click-to-open centered modal and blurred background."""
+    data_url = _image_to_data_url(file_path)
+    safe_caption = html.escape(caption)
+    safe_modal_id = html.escape(modal_id)
+    st.markdown(
+        f"""
+        <div class="modal-trigger">
+            <a href="#{safe_modal_id}">
+                <img src="{data_url}" />
+            </a>
+            <div class="cap">{safe_caption}</div>
+        </div>
+        <div id="{safe_modal_id}" class="img-modal">
+            <a href="#" class="close-btn" aria-label="Close">x</a>
+            <a href="#" class="modal-inner">
+                <div>
+                    <img src="{data_url}" />
+                    <div class="modal-caption">{safe_caption}</div>
+                </div>
+            </a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_plain_image_with_caption(file_path: str, caption: str) -> None:
+    """Render a normal non-modal image with caption."""
+    data_url = _image_to_data_url(file_path)
+    safe_caption = html.escape(caption)
+    st.markdown(
+        f"""
+        <div class="modal-trigger">
+            <img src="{data_url}" style="cursor: default;" />
+            <div class="cap">{safe_caption}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _secret_value(*keys: str) -> Optional[str]:
     """Return the first matching non-empty secret value from common key styles."""
-    for key in keys:
-        if key in st.secrets:
-            value = st.secrets[key]
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-
-    model_section = st.secrets.get("model")
-    if isinstance(model_section, dict):
+    try:
         for key in keys:
-            if key in model_section:
-                value = model_section[key]
+            if key in st.secrets:
+                value = st.secrets[key]
                 if isinstance(value, str) and value.strip():
                     return value.strip()
+
+        model_section = st.secrets.get("model")
+        if isinstance(model_section, dict):
+            for key in keys:
+                if key in model_section:
+                    value = model_section[key]
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+    except StreamlitSecretNotFoundError:
+        return None
     return None
 
 
@@ -144,6 +281,7 @@ def main() -> None:
     resolved_model_path, cloud_model_message = _resolve_default_model_path(defaults.model_path)
 
     st.set_page_config(page_title="Circuit Optimizer Visualizer", layout="wide")
+    _render_click_modal_styles()
     st.title("Circuit Optimizer Visualizer")
     st.write(
         "Automatically generate a random quantum circuit, optimize it, and compare before/after artifacts."
@@ -225,9 +363,20 @@ def main() -> None:
         st.dataframe(_build_method_comparison_table(result), use_container_width=True)
 
     img_cols = st.columns(3)
-    img_cols[0].image(artifacts["before"], caption=os.path.basename(artifacts["before"]))
-    img_cols[1].image(artifacts["after"], caption=os.path.basename(artifacts["after"]))
-    img_cols[2].image(artifacts["metrics"], caption=os.path.basename(artifacts["metrics"]))
+    with img_cols[0]:
+        _render_click_modal_image(
+            artifacts["before"],
+            os.path.basename(artifacts["before"]),
+            modal_id="before-modal",
+        )
+    with img_cols[1]:
+        _render_click_modal_image(
+            artifacts["after"],
+            os.path.basename(artifacts["after"]),
+            modal_id="after-modal",
+        )
+    with img_cols[2]:
+        _render_plain_image_with_caption(artifacts["metrics"], os.path.basename(artifacts["metrics"]))
 
     # ── Equivalence Verification ───────────────────────────────
     st.subheader("Equivalence Verification")
