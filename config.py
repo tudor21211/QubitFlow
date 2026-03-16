@@ -116,17 +116,6 @@ GA_TOURNAMENT_SIZE = 3
 GA_CROSSOVER_RATE = 0.7
 GA_MUTATION_RATE = 0.3
 GA_SEQUENCE_LENGTH = 20     # length of action sequences
-GA_SELECTION_MODE = "weighted"   # "weighted" (legacy) | "pareto"
-
-# Objectives used by Pareto mode (all minimized)
-GA_PARETO_OBJECTIVES = [
-	"depth",
-	"cx_count",
-	"estimated_error",
-	"execution_time_norm",
-	"routing_penalty",
-	"coherence_penalty",
-]
 
 # ── Hybrid optimizer ───────────────────────────────────────────────
 HYBRID_RL_MUTATION_PROB = 0.25  # probability of using RL during GA mutation
