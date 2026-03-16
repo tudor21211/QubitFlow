@@ -239,12 +239,12 @@ def main() -> None:
             st.error(f"Equivalence check failed: {eq['error']}")
         elif eq["is_equivalent"]:
             st.success(
-                "✅  **EQUIVALENT** — The optimized circuit implements the same unitary "
+                "**EQUIVALENT** — The optimized circuit implements the same unitary "
                 "transformation as the original (up to global phase)."
             )
         else:
             st.error(
-                "❌  **NOT EQUIVALENT** — The optimized circuit does NOT match the original. "
+                "**NOT EQUIVALENT** — The optimized circuit does NOT match the original. "
                 "One or more rewrite rules may have introduced a logical error."
             )
 
