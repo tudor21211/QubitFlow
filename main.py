@@ -53,18 +53,6 @@ def parse_args():
                     help="GA population size")
     p.add_argument("--runs", type=int, default=config.BENCHMARK_RUNS,
                     help="Benchmark repetitions per method")
-    p.add_argument(
-        "--ga-selection-mode",
-        type=str,
-        choices=["weighted", "pareto"],
-        default=config.GA_SELECTION_MODE,
-        help="GA parent selection mode",
-    )
-    p.add_argument(
-        "--selection-ablation",
-        action="store_true",
-        help="In benchmark mode, evaluate both weighted and pareto and print ablation rows",
-    )
     p.add_argument("--model-path", type=str, default="models/rl_agent",
                     help="Path for saving / loading RL model")
     p.add_argument("--qubits", type=int, default=4,
@@ -85,7 +73,6 @@ def run_demo(args):
     print("\n" + "=" * 60)
     print("  DEMO: Optimising a single random circuit")
     print("=" * 60)
-    print(f"GA selection mode: {config.GA_SELECTION_MODE}")
 
     n_q = max(args.qubits, 5)
     d = max(args.depth, 50)
@@ -232,7 +219,6 @@ def run_benchmark(args, agent: RLAgent | None = None):
         ga_generations=args.ga_gens,
         ga_pop_size=args.ga_pop,
         runs=args.runs,
-        selection_modes=["weighted", "pareto"] if args.selection_ablation else None,
     )
 
     print_summary_table(results)
@@ -293,8 +279,6 @@ def run_visualize(args):
 
 def main():
     args = parse_args()
-    config.GA_SELECTION_MODE = args.ga_selection_mode.lower()
-    print(f"Using GA selection mode: {config.GA_SELECTION_MODE}")
 
     mode_fn = {
         "demo": run_demo,

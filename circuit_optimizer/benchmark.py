@@ -26,94 +26,6 @@ from circuit_optimizer.representation import copy_circuit
 from circuit_optimizer.equivalence import check_equivalence, format_equivalence_result
 
 
-def _evaluate_ga_hybrid_for_mode(
-    qc: QuantumCircuit,
-    selection_mode: str,
-    rl_agent: Optional[RLAgent],
-    ga_generations: int,
-    ga_pop_size: int,
-    runs: int,
-) -> Dict:
-    """Evaluate GA / Hybrid for one GA selection mode."""
-    circuit_fn = lambda _qc=qc: copy_circuit(_qc)
-    old_mode = config.GA_SELECTION_MODE
-    config.GA_SELECTION_MODE = selection_mode
-    try:
-        # ── GA only ─────────────────────────────────────────
-        ga_costs = []
-        ga_times = []
-        best_ga_qc = None
-        best_ga_cost = np.inf
-
-        for _ in range(runs):
-            t0 = time.time()
-            ga = GeneticAlgorithm(
-                circuit_fn=circuit_fn,
-                generations=ga_generations,
-                pop_size=ga_pop_size,
-                verbose=False,
-            )
-            ga_qc, _ = ga.run()
-            elapsed = time.time() - t0
-            c = circuit_cost(ga_qc)
-            ga_costs.append(c)
-            ga_times.append(elapsed)
-            if c < best_ga_cost:
-                best_ga_cost = c
-                best_ga_qc = ga_qc
-
-        ga_m = circuit_metrics(best_ga_qc)
-        ga_m["objectives"] = circuit_objectives(best_ga_qc)
-        ga_m["avg_cost"] = float(np.mean(ga_costs))
-        ga_m["std_cost"] = float(np.std(ga_costs))
-        ga_m["avg_time_s"] = float(np.mean(ga_times))
-        ga_m["runs_cost"] = [float(x) for x in ga_costs]
-        ga_m["runs_time_s"] = [float(x) for x in ga_times]
-        ga_m["equivalence"] = check_equivalence(qc, best_ga_qc)
-
-        # ── Hybrid GA + RL ──────────────────────────────────
-        hybrid_m = None
-        if rl_agent is not None and rl_agent.model is not None:
-            hybrid_costs = []
-            hybrid_times = []
-            best_hybrid_qc = None
-            best_hybrid_cost = np.inf
-
-            for _ in range(runs):
-                t0 = time.time()
-                hybrid = HybridOptimizer(
-                    circuit_fn=circuit_fn,
-                    rl_agent=rl_agent,
-                    generations=ga_generations,
-                    pop_size=ga_pop_size,
-                    verbose=False,
-                )
-                h_qc, _ = hybrid.run()
-                polished = rl_agent.optimize(h_qc)
-                if circuit_cost(polished) < circuit_cost(h_qc):
-                    h_qc = polished
-                elapsed = time.time() - t0
-                c = circuit_cost(h_qc)
-                hybrid_costs.append(c)
-                hybrid_times.append(elapsed)
-                if c < best_hybrid_cost:
-                    best_hybrid_cost = c
-                    best_hybrid_qc = h_qc
-
-            hybrid_m = circuit_metrics(best_hybrid_qc)
-            hybrid_m["objectives"] = circuit_objectives(best_hybrid_qc)
-            hybrid_m["avg_cost"] = float(np.mean(hybrid_costs))
-            hybrid_m["std_cost"] = float(np.std(hybrid_costs))
-            hybrid_m["avg_time_s"] = float(np.mean(hybrid_times))
-            hybrid_m["runs_cost"] = [float(x) for x in hybrid_costs]
-            hybrid_m["runs_time_s"] = [float(x) for x in hybrid_times]
-            hybrid_m["equivalence"] = check_equivalence(qc, best_hybrid_qc)
-
-        return {"ga": ga_m, "hybrid": hybrid_m}
-    finally:
-        config.GA_SELECTION_MODE = old_mode
-
-
 def benchmark_single(
     qc: QuantumCircuit,
     name: str = "circuit",
@@ -121,7 +33,6 @@ def benchmark_single(
     ga_generations: int = config.GA_GENERATIONS,
     ga_pop_size: int = config.GA_POPULATION_SIZE,
     runs: int = config.BENCHMARK_RUNS,
-    selection_modes: Optional[List[str]] = None,
     verbose: bool = True,
 ) -> Dict:
     """
@@ -155,25 +66,38 @@ def benchmark_single(
               f"depth={base_m['depth']}  cx={base_m['cx_count']}  "
               f"time={base_time:.2f}s  equiv={eq_line}")
 
-    modes = selection_modes if selection_modes else [config.GA_SELECTION_MODE]
-    modes = list(dict.fromkeys(m.lower() for m in modes))
-    mode_results: Dict[str, Dict] = {}
+    # ── 3. GA only ─────────────────────────────────────────────
+    circuit_fn = lambda _qc=qc: copy_circuit(_qc)
+    ga_costs = []
+    ga_times = []
+    best_ga_qc = None
+    best_ga_cost = np.inf
 
-    for mode in modes:
-        mode_results[mode] = _evaluate_ga_hybrid_for_mode(
-            qc=qc,
-            selection_mode=mode,
-            rl_agent=rl_agent,
-            ga_generations=ga_generations,
-            ga_pop_size=ga_pop_size,
-            runs=runs,
+    for r in range(runs):
+        t0 = time.time()
+        ga = GeneticAlgorithm(
+            circuit_fn=circuit_fn,
+            generations=ga_generations,
+            pop_size=ga_pop_size,
+            verbose=False,
         )
+        ga_qc, _ = ga.run()
+        elapsed = time.time() - t0
+        c = circuit_cost(ga_qc)
+        ga_costs.append(c)
+        ga_times.append(elapsed)
+        if c < best_ga_cost:
+            best_ga_cost = c
+            best_ga_qc = ga_qc
 
-    active_mode = config.GA_SELECTION_MODE.lower()
-    if active_mode not in mode_results:
-        active_mode = modes[0]
-
-    ga_m = mode_results[active_mode]["ga"]
+    ga_m = circuit_metrics(best_ga_qc)
+    ga_m["objectives"] = circuit_objectives(best_ga_qc)
+    ga_m["avg_cost"] = float(np.mean(ga_costs))
+    ga_m["std_cost"] = float(np.std(ga_costs))
+    ga_m["avg_time_s"] = float(np.mean(ga_times))
+    ga_m["runs_cost"] = [float(x) for x in ga_costs]
+    ga_m["runs_time_s"] = [float(x) for x in ga_times]
+    ga_m["equivalence"] = check_equivalence(qc, best_ga_qc)
     results["ga"] = ga_m
     if verbose:
         eq_line = format_equivalence_result(ga_m["equivalence"])
@@ -183,7 +107,41 @@ def benchmark_single(
 
     # ── 4. Hybrid GA + RL ──────────────────────────────────────
     if rl_agent is not None and rl_agent.model is not None:
-        hybrid_m = mode_results[active_mode]["hybrid"]
+        hybrid_costs = []
+        hybrid_times = []
+        best_hybrid_qc = None
+        best_hybrid_cost = np.inf
+
+        for r in range(runs):
+            t0 = time.time()
+            hybrid = HybridOptimizer(
+                circuit_fn=circuit_fn,
+                rl_agent=rl_agent,
+                generations=ga_generations,
+                pop_size=ga_pop_size,
+                verbose=False,
+            )
+            h_qc, _ = hybrid.run()
+            # Also do RL polish
+            polished = rl_agent.optimize(h_qc)
+            if circuit_cost(polished) < circuit_cost(h_qc):
+                h_qc = polished
+            elapsed = time.time() - t0
+            c = circuit_cost(h_qc)
+            hybrid_costs.append(c)
+            hybrid_times.append(elapsed)
+            if c < best_hybrid_cost:
+                best_hybrid_cost = c
+                best_hybrid_qc = h_qc
+
+        hybrid_m = circuit_metrics(best_hybrid_qc)
+        hybrid_m["objectives"] = circuit_objectives(best_hybrid_qc)
+        hybrid_m["avg_cost"] = float(np.mean(hybrid_costs))
+        hybrid_m["std_cost"] = float(np.std(hybrid_costs))
+        hybrid_m["avg_time_s"] = float(np.mean(hybrid_times))
+        hybrid_m["runs_cost"] = [float(x) for x in hybrid_costs]
+        hybrid_m["runs_time_s"] = [float(x) for x in hybrid_times]
+        hybrid_m["equivalence"] = check_equivalence(qc, best_hybrid_qc)
         results["hybrid"] = hybrid_m
         if verbose:
             eq_line = format_equivalence_result(hybrid_m["equivalence"])
@@ -195,16 +153,6 @@ def benchmark_single(
         if verbose:
             print("  Hybrid: skipped (no trained RL agent)")
 
-    if len(modes) > 1:
-        ablations = []
-        for mode in modes:
-            ablations.append({
-                "selection_mode": mode,
-                "ga": mode_results[mode]["ga"],
-                "hybrid": mode_results[mode]["hybrid"],
-            })
-        results["ablation"] = ablations
-
     return results
 
 
@@ -214,7 +162,6 @@ def benchmark_suite(
     ga_generations: int = config.GA_GENERATIONS,
     ga_pop_size: int = config.GA_POPULATION_SIZE,
     runs: int = config.BENCHMARK_RUNS,
-    selection_modes: Optional[List[str]] = None,
     verbose: bool = True,
 ) -> List[Dict]:
     """
@@ -233,7 +180,6 @@ def benchmark_suite(
             ga_generations=ga_generations,
             ga_pop_size=ga_pop_size,
             runs=runs,
-            selection_modes=selection_modes,
             verbose=verbose,
         )
         all_results.append(res)
@@ -248,28 +194,6 @@ def print_summary_table(results: List[Dict]):
     print("\n" + "=" * len(header))
     print("  COST COMPARISON  (lower is better)  +  EQUIVALENCE")
     print("=" * len(header))
-
-    has_ablation = any(r.get("ablation") for r in results)
-    if has_ablation:
-        ab_hdr = (f"{'Circuit':<20} | {'Mode':<8} | {'GA':>10} | {'Hybrid':>10} | "
-                  f"{'GA Eq':>5} | {'Hybrid Eq':>9}")
-        print("\n" + "=" * len(ab_hdr))
-        print("  ABLATION: WEIGHTED VS PARETO")
-        print("=" * len(ab_hdr))
-        print(ab_hdr)
-        print("-" * len(ab_hdr))
-
-        for r in results:
-            for row in r.get("ablation", []):
-                ga_row = row.get("ga")
-                hy_row = row.get("hybrid")
-                ga_cost = f"{ga_row['cost']:.2f}" if ga_row else "N/A"
-                hy_cost = f"{hy_row['cost']:.2f}" if hy_row else "N/A"
-                ga_eq = "PASS" if ga_row and ga_row.get("equivalence", {}).get("is_equivalent", False) else ("N/A" if not ga_row else "FAIL")
-                hy_eq = "PASS" if hy_row and hy_row.get("equivalence", {}).get("is_equivalent", False) else ("N/A" if not hy_row else "FAIL")
-                print(f"{r['name']:<20} | {row['selection_mode']:<8} | {ga_cost:>10} | {hy_cost:>10} | {ga_eq:>5} | {hy_eq:>9}")
-
-        print("=" * len(ab_hdr))
     print(header)
     print("-" * len(header))
 
