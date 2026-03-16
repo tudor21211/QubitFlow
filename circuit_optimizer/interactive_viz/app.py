@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import html
+import inspect
 import mimetypes
 import os
 import sys
@@ -503,15 +504,24 @@ def main() -> None:
                 show_details=st.session_state.show_activity_details,
             )
 
-        result = generate_and_optimize(
-            n_qubits=n_qubits,
-            depth=depth,
-            seed=int(seed) if seed is not None else None,
-            ga_generations=ga_generations,
-            ga_pop_size=ga_pop_size,
-            model_path=model_path,
-            progress_callback=_on_progress,
-        )
+        optimize_kwargs = {
+            "n_qubits": n_qubits,
+            "depth": depth,
+            "seed": int(seed) if seed is not None else None,
+            "ga_generations": ga_generations,
+            "ga_pop_size": ga_pop_size,
+            "model_path": model_path,
+        }
+
+        if "progress_callback" in inspect.signature(generate_and_optimize).parameters:
+            optimize_kwargs["progress_callback"] = _on_progress
+        else:
+            st.warning(
+                "Live progress streaming is not available with the current runner version. "
+                "Run-level summary and artifacts will still be shown."
+            )
+
+        result = generate_and_optimize(**optimize_kwargs)
         artifacts = save_artifacts(result)
 
         st.session_state.last_result = result
