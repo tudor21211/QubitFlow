@@ -217,6 +217,8 @@ def save_artifacts(result) -> Dict[str, str]:
     after_path = os.path.join(OUTPUT_DIR, f"{prefix}_after.png")
     metrics_path = os.path.join(OUTPUT_DIR, f"{prefix}_metrics.png")
     equiv_path = os.path.join(OUTPUT_DIR, f"{prefix}_equivalence.png")
+    ga_only_path = None
+    hybrid_path = None
 
     save_circuit_image(result.original_circuit, before_path, "Original circuit")
     save_circuit_image(result.optimized_circuit, after_path, f"Optimized circuit ({result.method_used})")
@@ -236,9 +238,28 @@ def save_artifacts(result) -> Dict[str, str]:
     else:
         equiv_path = None
 
+    ga_metrics = getattr(result, "ga_metrics", None)
+    hybrid_metrics = getattr(result, "hybrid_metrics", None)
+    ga_circuit = getattr(result, "ga_circuit", None)
+    hybrid_circuit = getattr(result, "hybrid_circuit", None)
+
+    if (
+        ga_metrics is not None
+        and hybrid_metrics is not None
+        and ga_circuit is not None
+        and hybrid_circuit is not None
+        and hybrid_metrics["cost"] < ga_metrics["cost"]
+    ):
+        ga_only_path = os.path.join(OUTPUT_DIR, f"{prefix}_ga_only.png")
+        hybrid_path = os.path.join(OUTPUT_DIR, f"{prefix}_hybrid.png")
+        save_circuit_image(ga_circuit, ga_only_path, "GA-only optimized circuit")
+        save_circuit_image(hybrid_circuit, hybrid_path, "Hybrid (GA+RL) optimized circuit")
+
     return {
         "before": before_path,
         "after": after_path,
         "metrics": metrics_path,
         "equivalence": equiv_path,
+        "ga_only": ga_only_path,
+        "hybrid": hybrid_path,
     }

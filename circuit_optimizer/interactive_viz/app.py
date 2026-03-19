@@ -619,6 +619,22 @@ def main() -> None:
     with img_cols[2]:
         _render_plain_image_with_caption(artifacts["metrics"], os.path.basename(artifacts["metrics"]))
 
+    if artifacts.get("ga_only") and artifacts.get("hybrid"):
+        st.subheader("GA-only vs GA+RL Circuit Images")
+        compare_cols = st.columns(2)
+        with compare_cols[0]:
+            _render_click_modal_image(
+                artifacts["ga_only"],
+                os.path.basename(artifacts["ga_only"]),
+                modal_id="ga-only-modal",
+            )
+        with compare_cols[1]:
+            _render_click_modal_image(
+                artifacts["hybrid"],
+                os.path.basename(artifacts["hybrid"]),
+                modal_id="hybrid-modal",
+            )
+
     # ── Equivalence Verification ───────────────────────────────
     st.subheader("Equivalence Verification")
     eq = result.equivalence_result
