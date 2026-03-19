@@ -1,8 +1,5 @@
 """Runner helpers for the Streamlit visualization app."""
 
-from __future__ import annotations
-
-from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
@@ -21,26 +18,44 @@ class OptimizationCancelled(Exception):
     """Raised when an optimization run is cancelled by the caller."""
 
 
-@dataclass
 class OptimizationResult:
     """Container for one generation + optimization run."""
 
-    original_circuit: QuantumCircuit
-    optimized_circuit: QuantumCircuit
-    original_metrics: Dict
-    optimized_metrics: Dict
-    method_used: str
-    model_message: str
-    equivalence_result: Dict = None
-    ga_circuit: Optional[QuantumCircuit] = None
-    ga_metrics: Optional[Dict] = None
-    ga_equivalence_result: Optional[Dict] = None
-    hybrid_circuit: Optional[QuantumCircuit] = None
-    hybrid_metrics: Optional[Dict] = None
-    hybrid_equivalence_result: Optional[Dict] = None
-    run_events: List[Dict[str, Any]] = field(default_factory=list)
-    convergence_points: List[Dict[str, Any]] = field(default_factory=list)
-    attempt_summaries: List[Dict[str, Any]] = field(default_factory=list)
+    def __init__(
+        self,
+        original_circuit: QuantumCircuit,
+        optimized_circuit: QuantumCircuit,
+        original_metrics: Dict,
+        optimized_metrics: Dict,
+        method_used: str,
+        model_message: str,
+        equivalence_result: Optional[Dict] = None,
+        ga_circuit: Optional[QuantumCircuit] = None,
+        ga_metrics: Optional[Dict] = None,
+        ga_equivalence_result: Optional[Dict] = None,
+        hybrid_circuit: Optional[QuantumCircuit] = None,
+        hybrid_metrics: Optional[Dict] = None,
+        hybrid_equivalence_result: Optional[Dict] = None,
+        run_events: Optional[List[Dict[str, Any]]] = None,
+        convergence_points: Optional[List[Dict[str, Any]]] = None,
+        attempt_summaries: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        self.original_circuit = original_circuit
+        self.optimized_circuit = optimized_circuit
+        self.original_metrics = original_metrics
+        self.optimized_metrics = optimized_metrics
+        self.method_used = method_used
+        self.model_message = model_message
+        self.equivalence_result = equivalence_result
+        self.ga_circuit = ga_circuit
+        self.ga_metrics = ga_metrics
+        self.ga_equivalence_result = ga_equivalence_result
+        self.hybrid_circuit = hybrid_circuit
+        self.hybrid_metrics = hybrid_metrics
+        self.hybrid_equivalence_result = hybrid_equivalence_result
+        self.run_events = list(run_events) if run_events is not None else []
+        self.convergence_points = list(convergence_points) if convergence_points is not None else []
+        self.attempt_summaries = list(attempt_summaries) if attempt_summaries is not None else []
 
 
 def _emit_progress(

@@ -6,10 +6,7 @@ Each *individual* is a fixed-length sequence of action indices.
 Fitness = -cost of the circuit after applying the sequence.
 """
 
-from __future__ import annotations
-
 import random
-from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Tuple
 
 import numpy as np
@@ -21,12 +18,18 @@ from circuit_optimizer.cost import circuit_cost, fitness as calc_fitness
 from circuit_optimizer.representation import copy_circuit
 
 
-@dataclass
 class Individual:
     """One member of the GA population."""
-    sequence: List[int]
-    fitness: float = -np.inf
-    result_circuit: Optional[QuantumCircuit] = None
+
+    def __init__(
+        self,
+        sequence: List[int],
+        fitness: float = -np.inf,
+        result_circuit: Optional[QuantumCircuit] = None,
+    ) -> None:
+        self.sequence = sequence
+        self.fitness = fitness
+        self.result_circuit = result_circuit
 
 
 # ───────────────────────────────────────────────────────────────────
