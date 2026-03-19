@@ -76,7 +76,11 @@ class GeneticAlgorithm:
 
     # ── public API ─────────────────────────────────────────────
 
-    def run(self, stop_check: Optional[Callable[[], bool]] = None) -> Tuple[QuantumCircuit, List[dict]]:
+    def run(
+        self,
+        stop_check: Optional[Callable[[], bool]] = None,
+        generation_callback: Optional[Callable[[dict], None]] = None,
+    ) -> Tuple[QuantumCircuit, List[dict]]:
         """Execute the GA and return (best_circuit, history)."""
         self._init_population()
         self._evaluate_all()
@@ -122,6 +126,13 @@ class GeneticAlgorithm:
                 "best_cost": -max(fits),
             }
             self.history.append(gen_stats)
+
+            if generation_callback is not None:
+                try:
+                    generation_callback(gen_stats)
+                except Exception:
+                    # Progress callbacks must not break optimization.
+                    pass
 
             if self.verbose:
                 print(f"  Gen {gen:3d} | best_cost={gen_stats['best_cost']:.4f}"

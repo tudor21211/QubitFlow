@@ -101,6 +101,7 @@ def _run_ga(
     ga_generations: int,
     ga_pop_size: int,
     cancel_check: Optional[Callable[[], bool]] = None,
+    generation_callback: Optional[Callable[[dict], None]] = None,
 ) -> tuple[QuantumCircuit, List[dict]]:
     """Run the GA optimizer and return the best circuit found."""
     ga = GeneticAlgorithm(
@@ -109,7 +110,13 @@ def _run_ga(
         pop_size=ga_pop_size,
         verbose=False,
     )
-    if "stop_check" in inspect.signature(ga.run).parameters:
+    run_params = inspect.signature(ga.run).parameters
+    if "stop_check" in run_params and "generation_callback" in run_params:
+        best_qc, history = ga.run(
+            stop_check=cancel_check,
+            generation_callback=generation_callback,
+        )
+    elif "stop_check" in run_params:
         best_qc, history = ga.run(stop_check=cancel_check)
     else:
         best_qc, history = ga.run()
@@ -122,6 +129,7 @@ def _run_hybrid(
     ga_generations: int,
     ga_pop_size: int,
     cancel_check: Optional[Callable[[], bool]] = None,
+    generation_callback: Optional[Callable[[dict], None]] = None,
 ) -> tuple[QuantumCircuit, List[dict]]:
     """Run the hybrid optimizer and return the best circuit found."""
     hybrid = HybridOptimizer(
@@ -131,7 +139,13 @@ def _run_hybrid(
         pop_size=ga_pop_size,
         verbose=False,
     )
-    if "stop_check" in inspect.signature(hybrid.run).parameters:
+    run_params = inspect.signature(hybrid.run).parameters
+    if "stop_check" in run_params and "generation_callback" in run_params:
+        best_qc, history = hybrid.run(
+            stop_check=cancel_check,
+            generation_callback=generation_callback,
+        )
+    elif "stop_check" in run_params:
         best_qc, history = hybrid.run(stop_check=cancel_check)
     else:
         best_qc, history = hybrid.run()
@@ -260,22 +274,11 @@ def generate_and_optimize(
                 generation=0,
                 total_generations=ga_generations,
             )
-            ga_optimized = _run_ga(
-                base_circuit=original,
-                ga_generations=ga_generations,
-                ga_pop_size=ga_pop_size,
-                cancel_check=cancel_check,
-            )
-            ga_optimized, ga_history = ga_optimized
-            _raise_if_cancelled(
-                cancel_check,
-                run_events,
-                progress_callback,
-                attempt=attempt_no,
-                max_attempts=max_attempts,
-                phase="ga",
-            )
-            for point in ga_history:
+            ga_progress_streamed = False
+
+            def _on_ga_generation(point: Dict[str, Any]) -> None:
+                nonlocal ga_progress_streamed
+                ga_progress_streamed = True
                 convergence_points.append(
                     {
                         "attempt": attempt_no,
@@ -305,6 +308,26 @@ def generate_and_optimize(
                     avg_cost=float(-point["avg_fitness"]),
                 )
 
+            ga_optimized = _run_ga(
+                base_circuit=original,
+                ga_generations=ga_generations,
+                ga_pop_size=ga_pop_size,
+                cancel_check=cancel_check,
+                generation_callback=_on_ga_generation,
+            )
+            ga_optimized, ga_history = ga_optimized
+            _raise_if_cancelled(
+                cancel_check,
+                run_events,
+                progress_callback,
+                attempt=attempt_no,
+                max_attempts=max_attempts,
+                phase="ga",
+            )
+            if not ga_progress_streamed:
+                for point in ga_history:
+                    _on_ga_generation(point)
+
             _emit_progress(
                 run_events,
                 progress_callback,
@@ -316,23 +339,11 @@ def generate_and_optimize(
                 generation=0,
                 total_generations=ga_generations,
             )
-            hybrid_optimized = _run_hybrid(
-                base_circuit=original,
-                rl_agent=rl_agent,
-                ga_generations=ga_generations,
-                ga_pop_size=ga_pop_size,
-                cancel_check=cancel_check,
-            )
-            hybrid_optimized, hybrid_history = hybrid_optimized
-            _raise_if_cancelled(
-                cancel_check,
-                run_events,
-                progress_callback,
-                attempt=attempt_no,
-                max_attempts=max_attempts,
-                phase="hybrid",
-            )
-            for point in hybrid_history:
+            hybrid_progress_streamed = False
+
+            def _on_hybrid_generation(point: Dict[str, Any]) -> None:
+                nonlocal hybrid_progress_streamed
+                hybrid_progress_streamed = True
                 convergence_points.append(
                     {
                         "attempt": attempt_no,
@@ -361,6 +372,27 @@ def generate_and_optimize(
                     best_cost=float(point["best_cost"]),
                     avg_cost=float(-point["avg_fitness"]),
                 )
+
+            hybrid_optimized = _run_hybrid(
+                base_circuit=original,
+                rl_agent=rl_agent,
+                ga_generations=ga_generations,
+                ga_pop_size=ga_pop_size,
+                cancel_check=cancel_check,
+                generation_callback=_on_hybrid_generation,
+            )
+            hybrid_optimized, hybrid_history = hybrid_optimized
+            _raise_if_cancelled(
+                cancel_check,
+                run_events,
+                progress_callback,
+                attempt=attempt_no,
+                max_attempts=max_attempts,
+                phase="hybrid",
+            )
+            if not hybrid_progress_streamed:
+                for point in hybrid_history:
+                    _on_hybrid_generation(point)
 
             _emit_progress(
                 run_events,
@@ -400,22 +432,11 @@ def generate_and_optimize(
                 generation=0,
                 total_generations=ga_generations,
             )
-            optimized = _run_ga(
-                base_circuit=original,
-                ga_generations=ga_generations,
-                ga_pop_size=ga_pop_size,
-                cancel_check=cancel_check,
-            )
-            optimized, ga_history = optimized
-            _raise_if_cancelled(
-                cancel_check,
-                run_events,
-                progress_callback,
-                attempt=attempt_no,
-                max_attempts=max_attempts,
-                phase="ga",
-            )
-            for point in ga_history:
+            ga_only_progress_streamed = False
+
+            def _on_ga_only_generation(point: Dict[str, Any]) -> None:
+                nonlocal ga_only_progress_streamed
+                ga_only_progress_streamed = True
                 convergence_points.append(
                     {
                         "attempt": attempt_no,
@@ -444,6 +465,26 @@ def generate_and_optimize(
                     best_cost=float(point["best_cost"]),
                     avg_cost=float(-point["avg_fitness"]),
                 )
+
+            optimized = _run_ga(
+                base_circuit=original,
+                ga_generations=ga_generations,
+                ga_pop_size=ga_pop_size,
+                cancel_check=cancel_check,
+                generation_callback=_on_ga_only_generation,
+            )
+            optimized, ga_history = optimized
+            _raise_if_cancelled(
+                cancel_check,
+                run_events,
+                progress_callback,
+                attempt=attempt_no,
+                max_attempts=max_attempts,
+                phase="ga",
+            )
+            if not ga_only_progress_streamed:
+                for point in ga_history:
+                    _on_ga_only_generation(point)
 
             optimized_metrics = circuit_metrics(optimized)
             method_used = "GA"
