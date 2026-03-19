@@ -73,12 +73,15 @@ class GeneticAlgorithm:
 
     # ── public API ─────────────────────────────────────────────
 
-    def run(self) -> Tuple[QuantumCircuit, List[dict]]:
+    def run(self, stop_check: Optional[Callable[[], bool]] = None) -> Tuple[QuantumCircuit, List[dict]]:
         """Execute the GA and return (best_circuit, history)."""
         self._init_population()
         self._evaluate_all()
 
         for gen in range(self.generations):
+            if stop_check is not None and stop_check():
+                break
+
             new_pop: List[Individual] = []
 
             # Elitism

@@ -141,6 +141,7 @@ class RLAgent:
         qc: QuantumCircuit,
         max_steps: int = config.MAX_STEPS_PER_EPISODE,
         deterministic: bool = True,
+        stop_check: Optional[Callable[[], bool]] = None,
     ) -> QuantumCircuit:
         """
         Apply the learned policy greedily to *qc* and return the
@@ -153,6 +154,8 @@ class RLAgent:
         obs, _ = env.reset()
 
         for _ in range(max_steps):
+            if stop_check is not None and stop_check():
+                break
             action, _ = self.model.predict(obs, deterministic=deterministic)
             obs, _, terminated, truncated, _ = env.step(int(action))
             if terminated or truncated:
@@ -172,7 +175,12 @@ class RLAgent:
 
     # ── Greedy local search (key for hybrid) ──────────────────
 
-    def refine(self, qc: QuantumCircuit, max_steps: int = 30) -> QuantumCircuit:
+    def refine(
+        self,
+        qc: QuantumCircuit,
+        max_steps: int = 30,
+        stop_check: Optional[Callable[[], bool]] = None,
+    ) -> QuantumCircuit:
         """
         Greedy local search: at each step, try ALL actions and pick
         the one that yields the lowest cost.  Much stronger than
@@ -188,6 +196,8 @@ class RLAgent:
         n_act = num_actions()
 
         for _ in range(max_steps):
+            if stop_check is not None and stop_check():
+                break
             improved = False
             best_action_qc = None
             best_action_cost = current_cost

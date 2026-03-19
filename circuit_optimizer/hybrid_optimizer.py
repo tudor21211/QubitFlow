@@ -83,13 +83,13 @@ class HybridOptimizer(GeneticAlgorithm):
         return seq
 
     # ── override: add post-GA refinement ───────────────────────
-    def run(self) -> Tuple[QuantumCircuit, List[dict]]:
+    def run(self, stop_check: Optional[Callable[[], bool]] = None) -> Tuple[QuantumCircuit, List[dict]]:
         """
         Phase 1: Run GA with RL-guided mutations.
         Phase 2: Greedy-refine top-k results from GA.
         """
         # Phase 1 – standard GA run (with RL-guided mutation)
-        best_qc, history = super().run()
+        best_qc, history = super().run(stop_check=stop_check)
         ga_cost = circuit_cost(best_qc)
 
         # Phase 2 – refine top-k individuals
@@ -116,8 +116,12 @@ class HybridOptimizer(GeneticAlgorithm):
             overall_best = best_qc
             overall_best_cost = ga_cost
             for cand in candidates:
+                if stop_check is not None and stop_check():
+                    break
                 refined = self.rl_agent.refine(
-                    cand, max_steps=self.rl_refine_steps
+                    cand,
+                    max_steps=self.rl_refine_steps,
+                    stop_check=stop_check,
                 )
                 rc = circuit_cost(refined)
                 if rc < overall_best_cost:

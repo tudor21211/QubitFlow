@@ -10,7 +10,9 @@ import mimetypes
 import os
 import sys
 import tempfile
+import threading
 import urllib.request
+import uuid
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -24,7 +26,51 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from circuit_optimizer.interactive_viz.plotting import save_artifacts
-from circuit_optimizer.interactive_viz.runner import OptimizationResult, generate_and_optimize
+from circuit_optimizer.interactive_viz.runner import (
+    OptimizationCancelled,
+    OptimizationResult,
+    generate_and_optimize,
+)
+
+
+_RUN_CONTROL_LOCK = threading.Lock()
+_RUN_CONTROL: Dict[str, Any] = {
+    "active_run_id": None,
+    "cancel_flags": {},
+}
+
+
+def _mark_existing_run_cancelled() -> Optional[str]:
+    """Cancel currently active run, if any, and return its ID."""
+    with _RUN_CONTROL_LOCK:
+        active_run_id = _RUN_CONTROL.get("active_run_id")
+        if active_run_id is None:
+            return None
+        _RUN_CONTROL["cancel_flags"][active_run_id] = True
+        return active_run_id
+
+
+def _start_run() -> str:
+    """Create and register a new run ID."""
+    run_id = uuid.uuid4().hex
+    with _RUN_CONTROL_LOCK:
+        _RUN_CONTROL["active_run_id"] = run_id
+        _RUN_CONTROL["cancel_flags"][run_id] = False
+    return run_id
+
+
+def _is_cancelled(run_id: str) -> bool:
+    """Return whether cancellation has been requested for run_id."""
+    with _RUN_CONTROL_LOCK:
+        return bool(_RUN_CONTROL["cancel_flags"].get(run_id, False))
+
+
+def _finish_run(run_id: str) -> None:
+    """Release run tracking for a completed/cancelled run."""
+    with _RUN_CONTROL_LOCK:
+        _RUN_CONTROL["cancel_flags"].pop(run_id, None)
+        if _RUN_CONTROL.get("active_run_id") == run_id:
+            _RUN_CONTROL["active_run_id"] = None
 
 
 def _image_to_data_url(file_path: str) -> str:
@@ -299,6 +345,8 @@ def _init_run_state() -> None:
         st.session_state.last_artifacts = None
     if "show_activity_details" not in st.session_state:
         st.session_state.show_activity_details = False
+    if "reload_cancel_notice" not in st.session_state:
+        st.session_state.reload_cancel_notice = None
 
 
 def _reset_live_run_state() -> None:
@@ -431,6 +479,17 @@ def main() -> None:
 
     _init_run_state()
 
+    cancelled_run_id = _mark_existing_run_cancelled()
+    if cancelled_run_id is not None:
+        st.session_state.reload_cancel_notice = cancelled_run_id
+
+    if st.session_state.reload_cancel_notice:
+        st.warning(
+            "Detected a page reload while optimization was running. "
+            "The previous run was cancelled to keep the app responsive."
+        )
+        st.session_state.reload_cancel_notice = None
+
     st.subheader("Live Optimization Activity")
     st.caption(
         "This panel streams the code path in real time: circuit generation, GA/hybrid phases, and per-generation convergence."
@@ -473,6 +532,7 @@ def main() -> None:
 
     if run_clicked:
         _reset_live_run_state()
+        run_id = _start_run()
 
         def _on_progress(event: Dict[str, Any]) -> None:
             st.session_state.live_events.append(event)
@@ -521,8 +581,39 @@ def main() -> None:
                 "Run-level summary and artifacts will still be shown."
             )
 
-        result = generate_and_optimize(**optimize_kwargs)
-        artifacts = save_artifacts(result)
+        if "cancel_check" in inspect.signature(generate_and_optimize).parameters:
+            optimize_kwargs["cancel_check"] = lambda rid=run_id: _is_cancelled(rid)
+
+        try:
+            result = generate_and_optimize(**optimize_kwargs)
+            artifacts = save_artifacts(result)
+        except OptimizationCancelled:
+            st.session_state.live_phase = "cancelled"
+            st.session_state.live_events.append(
+                {
+                    "timestamp": "--:--:--",
+                    "event_type": "run-cancelled",
+                    "message": "Optimization was cancelled (page reload or another run started).",
+                    "phase": "cancel",
+                }
+            )
+            _render_live_activity(
+                attempt_placeholder=attempt_progress_placeholder,
+                generation_placeholder=generation_progress_placeholder,
+                chart_placeholder=convergence_chart_placeholder,
+                log_placeholder=live_log_placeholder,
+                status_placeholder=live_status_placeholder,
+                running=False,
+                show_details=st.session_state.show_activity_details,
+            )
+            st.warning("Optimization cancelled.")
+            _finish_run(run_id)
+            return
+        except Exception:
+            _finish_run(run_id)
+            raise
+
+        _finish_run(run_id)
 
         st.session_state.last_result = result
         st.session_state.last_artifacts = artifacts

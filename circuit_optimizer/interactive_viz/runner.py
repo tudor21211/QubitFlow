@@ -17,6 +17,10 @@ from circuit_optimizer.representation import copy_circuit
 from circuit_optimizer.rl_agent import RLAgent
 
 
+class OptimizationCancelled(Exception):
+    """Raised when an optimization run is cancelled by the caller."""
+
+
 @dataclass
 class OptimizationResult:
     """Container for one generation + optimization run."""
@@ -80,6 +84,7 @@ def _run_ga(
     base_circuit: QuantumCircuit,
     ga_generations: int,
     ga_pop_size: int,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> tuple[QuantumCircuit, List[dict]]:
     """Run the GA optimizer and return the best circuit found."""
     ga = GeneticAlgorithm(
@@ -88,7 +93,7 @@ def _run_ga(
         pop_size=ga_pop_size,
         verbose=False,
     )
-    best_qc, history = ga.run()
+    best_qc, history = ga.run(stop_check=cancel_check)
     return best_qc, history
 
 
@@ -97,6 +102,7 @@ def _run_hybrid(
     rl_agent: RLAgent,
     ga_generations: int,
     ga_pop_size: int,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> tuple[QuantumCircuit, List[dict]]:
     """Run the hybrid optimizer and return the best circuit found."""
     hybrid = HybridOptimizer(
@@ -106,13 +112,38 @@ def _run_hybrid(
         pop_size=ga_pop_size,
         verbose=False,
     )
-    best_qc, history = hybrid.run()
+    best_qc, history = hybrid.run(stop_check=cancel_check)
+
+    if cancel_check is not None and cancel_check():
+        return best_qc, history
 
     # Optional polish step with the learned policy.
-    polished = rl_agent.optimize(best_qc)
+    polished = rl_agent.optimize(best_qc, stop_check=cancel_check)
     if circuit_cost(polished) < circuit_cost(best_qc):
         return polished, history
     return best_qc, history
+
+
+def _raise_if_cancelled(
+    cancel_check: Optional[Callable[[], bool]],
+    events: List[Dict[str, Any]],
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]],
+    attempt: Optional[int] = None,
+    max_attempts: Optional[int] = None,
+    phase: str = "cancel",
+) -> None:
+    """Raise OptimizationCancelled when cancellation is requested."""
+    if cancel_check is not None and cancel_check():
+        _emit_progress(
+            events,
+            progress_callback,
+            event_type="run-cancelled",
+            message="Optimization cancelled.",
+            attempt=attempt,
+            max_attempts=max_attempts,
+            phase=phase,
+        )
+        raise OptimizationCancelled("Optimization cancelled by request.")
 
 
 def generate_and_optimize(
@@ -124,6 +155,7 @@ def generate_and_optimize(
     model_path: str,
     max_attempts: int = 3,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> OptimizationResult:
     """Generate random circuits and optimize until gate reduction is found or attempts end."""
     rl_agent, model_message = _try_load_agent(model_path)
@@ -138,6 +170,7 @@ def generate_and_optimize(
         message="Starting Generate and Optimize run.",
         max_attempts=max_attempts,
     )
+    _raise_if_cancelled(cancel_check, run_events, progress_callback, phase="start")
 
     best_result: Optional[OptimizationResult] = None
     best_gate_delta = 10**9
@@ -145,6 +178,14 @@ def generate_and_optimize(
     for attempt in range(max_attempts):
         attempt_no = attempt + 1
         trial_seed = None if seed is None else seed + attempt
+        _raise_if_cancelled(
+            cancel_check,
+            run_events,
+            progress_callback,
+            attempt=attempt_no,
+            max_attempts=max_attempts,
+            phase="attempt-start",
+        )
         _emit_progress(
             run_events,
             progress_callback,
@@ -159,6 +200,14 @@ def generate_and_optimize(
 
         original = random_redundant_circuit(n_qubits=n_qubits, depth=depth, seed=trial_seed)
         original_metrics = circuit_metrics(original)
+        _raise_if_cancelled(
+            cancel_check,
+            run_events,
+            progress_callback,
+            attempt=attempt_no,
+            max_attempts=max_attempts,
+            phase="generate",
+        )
 
         _emit_progress(
             run_events,
@@ -190,8 +239,17 @@ def generate_and_optimize(
                 base_circuit=original,
                 ga_generations=ga_generations,
                 ga_pop_size=ga_pop_size,
+                cancel_check=cancel_check,
             )
             ga_optimized, ga_history = ga_optimized
+            _raise_if_cancelled(
+                cancel_check,
+                run_events,
+                progress_callback,
+                attempt=attempt_no,
+                max_attempts=max_attempts,
+                phase="ga",
+            )
             for point in ga_history:
                 convergence_points.append(
                     {
@@ -238,8 +296,17 @@ def generate_and_optimize(
                 rl_agent=rl_agent,
                 ga_generations=ga_generations,
                 ga_pop_size=ga_pop_size,
+                cancel_check=cancel_check,
             )
             hybrid_optimized, hybrid_history = hybrid_optimized
+            _raise_if_cancelled(
+                cancel_check,
+                run_events,
+                progress_callback,
+                attempt=attempt_no,
+                max_attempts=max_attempts,
+                phase="hybrid",
+            )
             for point in hybrid_history:
                 convergence_points.append(
                     {
@@ -312,8 +379,17 @@ def generate_and_optimize(
                 base_circuit=original,
                 ga_generations=ga_generations,
                 ga_pop_size=ga_pop_size,
+                cancel_check=cancel_check,
             )
             optimized, ga_history = optimized
+            _raise_if_cancelled(
+                cancel_check,
+                run_events,
+                progress_callback,
+                attempt=attempt_no,
+                max_attempts=max_attempts,
+                phase="ga",
+            )
             for point in ga_history:
                 convergence_points.append(
                     {
