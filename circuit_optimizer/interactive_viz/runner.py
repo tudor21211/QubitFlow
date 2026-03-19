@@ -1,5 +1,6 @@
 """Runner helpers for the Streamlit visualization app."""
 
+import inspect
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
@@ -108,7 +109,10 @@ def _run_ga(
         pop_size=ga_pop_size,
         verbose=False,
     )
-    best_qc, history = ga.run(stop_check=cancel_check)
+    if "stop_check" in inspect.signature(ga.run).parameters:
+        best_qc, history = ga.run(stop_check=cancel_check)
+    else:
+        best_qc, history = ga.run()
     return best_qc, history
 
 
@@ -127,13 +131,19 @@ def _run_hybrid(
         pop_size=ga_pop_size,
         verbose=False,
     )
-    best_qc, history = hybrid.run(stop_check=cancel_check)
+    if "stop_check" in inspect.signature(hybrid.run).parameters:
+        best_qc, history = hybrid.run(stop_check=cancel_check)
+    else:
+        best_qc, history = hybrid.run()
 
     if cancel_check is not None and cancel_check():
         return best_qc, history
 
     # Optional polish step with the learned policy.
-    polished = rl_agent.optimize(best_qc, stop_check=cancel_check)
+    if "stop_check" in inspect.signature(rl_agent.optimize).parameters:
+        polished = rl_agent.optimize(best_qc, stop_check=cancel_check)
+    else:
+        polished = rl_agent.optimize(best_qc)
     if circuit_cost(polished) < circuit_cost(best_qc):
         return polished, history
     return best_qc, history
