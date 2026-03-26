@@ -28,6 +28,8 @@ GA_TOURNAMENT_SIZE = 3
 GA_CROSSOVER_RATE = 0.7
 GA_MUTATION_RATE = 0.3
 GA_SEQUENCE_LENGTH = 20     # length of action sequences
+GA_EARLY_STOP_PATIENCE_MIN = 20
+GA_EARLY_STOP_PATIENCE_MAX = 30
 
 # ── Hybrid optimizer ───────────────────────────────────────────────
 HYBRID_RL_MUTATION_PROB = 0.25  # probability of using RL during GA mutation

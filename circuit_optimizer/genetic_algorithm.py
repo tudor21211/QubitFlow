@@ -57,6 +57,8 @@ class GeneticAlgorithm:
         crossover_rate: float = config.GA_CROSSOVER_RATE,
         mutation_rate: float = config.GA_MUTATION_RATE,
         seq_length: int = config.GA_SEQUENCE_LENGTH,
+        early_stop_patience: Optional[int] = None,
+        early_stop_min_delta: float = 1e-9,
         verbose: bool = True,
     ):
         self.circuit_fn = circuit_fn
@@ -67,6 +69,8 @@ class GeneticAlgorithm:
         self.crossover_rate = crossover_rate
         self.mutation_rate = mutation_rate
         self.seq_length = seq_length
+        self.early_stop_patience = early_stop_patience
+        self.early_stop_min_delta = early_stop_min_delta
         self.n_actions = num_actions()
         self.verbose = verbose
 
@@ -84,6 +88,8 @@ class GeneticAlgorithm:
         """Execute the GA and return (best_circuit, history)."""
         self._init_population()
         self._evaluate_all()
+        best_cost_so_far = float("inf")
+        no_improve_streak = 0
 
         for gen in range(self.generations):
             if stop_check is not None and stop_check():
@@ -127,6 +133,13 @@ class GeneticAlgorithm:
             }
             self.history.append(gen_stats)
 
+            current_best_cost = float(gen_stats["best_cost"])
+            if current_best_cost < (best_cost_so_far - self.early_stop_min_delta):
+                best_cost_so_far = current_best_cost
+                no_improve_streak = 0
+            else:
+                no_improve_streak += 1
+
             if generation_callback is not None:
                 try:
                     generation_callback(gen_stats)
@@ -137,6 +150,18 @@ class GeneticAlgorithm:
             if self.verbose:
                 print(f"  Gen {gen:3d} | best_cost={gen_stats['best_cost']:.4f}"
                       f"  avg_cost={-gen_stats['avg_fitness']:.4f}")
+
+            if (
+                self.early_stop_patience is not None
+                and self.early_stop_patience > 0
+                and no_improve_streak >= self.early_stop_patience
+            ):
+                if self.verbose:
+                    print(
+                        "  Early stop: best_cost did not improve for "
+                        f"{self.early_stop_patience} generations."
+                    )
+                break
 
         # Return result
         return copy_circuit(self.best_individual.result_circuit), self.history

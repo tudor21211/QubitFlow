@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from qiskit import QuantumCircuit
 
+import config
 from circuit_optimizer.circuits.generators import random_redundant_circuit
 from circuit_optimizer.cost import circuit_cost, circuit_metrics
 from circuit_optimizer.equivalence import check_equivalence
@@ -17,6 +18,17 @@ from circuit_optimizer.rl_agent import RLAgent
 
 class OptimizationCancelled(Exception):
     """Raised when an optimization run is cancelled by the caller."""
+
+
+def _adaptive_ga_patience(total_generations: int) -> int:
+    """Return an adaptive early-stop patience bounded by config limits."""
+    lower = int(getattr(config, "GA_EARLY_STOP_PATIENCE_MIN", 20))
+    upper = int(getattr(config, "GA_EARLY_STOP_PATIENCE_MAX", 30))
+    if lower > upper:
+        lower, upper = upper, lower
+
+    scaled = max(1, total_generations // 5)
+    return max(lower, min(upper, scaled))
 
 
 class OptimizationResult:
@@ -102,13 +114,21 @@ def _run_ga(
     ga_pop_size: int,
     cancel_check: Optional[Callable[[], bool]] = None,
     generation_callback: Optional[Callable[[dict], None]] = None,
+    early_stop_patience: Optional[int] = None,
 ) -> tuple[QuantumCircuit, List[dict]]:
     """Run the GA optimizer and return the best circuit found."""
+    ga_kwargs: Dict[str, Any] = {
+        "circuit_fn": lambda: copy_circuit(base_circuit),
+        "generations": ga_generations,
+        "pop_size": ga_pop_size,
+        "verbose": False,
+    }
+    init_params = inspect.signature(GeneticAlgorithm.__init__).parameters
+    if early_stop_patience is not None and "early_stop_patience" in init_params:
+        ga_kwargs["early_stop_patience"] = int(early_stop_patience)
+
     ga = GeneticAlgorithm(
-        circuit_fn=lambda: copy_circuit(base_circuit),
-        generations=ga_generations,
-        pop_size=ga_pop_size,
-        verbose=False,
+        **ga_kwargs,
     )
     run_params = inspect.signature(ga.run).parameters
     if "stop_check" in run_params and "generation_callback" in run_params:
@@ -130,14 +150,22 @@ def _run_hybrid(
     ga_pop_size: int,
     cancel_check: Optional[Callable[[], bool]] = None,
     generation_callback: Optional[Callable[[dict], None]] = None,
+    early_stop_patience: Optional[int] = None,
 ) -> tuple[QuantumCircuit, List[dict]]:
     """Run the hybrid optimizer and return the best circuit found."""
+    hybrid_kwargs: Dict[str, Any] = {
+        "circuit_fn": lambda: copy_circuit(base_circuit),
+        "rl_agent": rl_agent,
+        "generations": ga_generations,
+        "pop_size": ga_pop_size,
+        "verbose": False,
+    }
+    init_params = inspect.signature(HybridOptimizer.__init__).parameters
+    if early_stop_patience is not None and "early_stop_patience" in init_params:
+        hybrid_kwargs["early_stop_patience"] = int(early_stop_patience)
+
     hybrid = HybridOptimizer(
-        circuit_fn=lambda: copy_circuit(base_circuit),
-        rl_agent=rl_agent,
-        generations=ga_generations,
-        pop_size=ga_pop_size,
-        verbose=False,
+        **hybrid_kwargs,
     )
     run_params = inspect.signature(hybrid.run).parameters
     if "stop_check" in run_params and "generation_callback" in run_params:
@@ -201,6 +229,7 @@ def generate_and_optimize(
     run_events: List[Dict[str, Any]] = []
     convergence_points: List[Dict[str, Any]] = []
     attempt_summaries: List[Dict[str, Any]] = []
+    ga_patience = _adaptive_ga_patience(ga_generations)
 
     _emit_progress(
         run_events,
@@ -314,6 +343,7 @@ def generate_and_optimize(
                 ga_pop_size=ga_pop_size,
                 cancel_check=cancel_check,
                 generation_callback=_on_ga_generation,
+                early_stop_patience=ga_patience,
             )
             ga_optimized, ga_history = ga_optimized
             _raise_if_cancelled(
@@ -327,6 +357,23 @@ def generate_and_optimize(
             if not ga_progress_streamed:
                 for point in ga_history:
                     _on_ga_generation(point)
+
+            if len(ga_history) < ga_generations:
+                _emit_progress(
+                    run_events,
+                    progress_callback,
+                    event_type="phase-end",
+                    message=(
+                        f"Attempt {attempt_no}/{max_attempts}: GA early-stopped at "
+                        f"generation {len(ga_history)}/{ga_generations} "
+                        f"(patience={ga_patience})."
+                    ),
+                    attempt=attempt_no,
+                    max_attempts=max_attempts,
+                    phase="ga",
+                    generation=len(ga_history),
+                    total_generations=ga_generations,
+                )
 
             _emit_progress(
                 run_events,
@@ -380,6 +427,7 @@ def generate_and_optimize(
                 ga_pop_size=ga_pop_size,
                 cancel_check=cancel_check,
                 generation_callback=_on_hybrid_generation,
+                early_stop_patience=ga_patience,
             )
             hybrid_optimized, hybrid_history = hybrid_optimized
             _raise_if_cancelled(
@@ -393,6 +441,23 @@ def generate_and_optimize(
             if not hybrid_progress_streamed:
                 for point in hybrid_history:
                     _on_hybrid_generation(point)
+
+            if len(hybrid_history) < ga_generations:
+                _emit_progress(
+                    run_events,
+                    progress_callback,
+                    event_type="phase-end",
+                    message=(
+                        f"Attempt {attempt_no}/{max_attempts}: Hybrid GA early-stopped at "
+                        f"generation {len(hybrid_history)}/{ga_generations} "
+                        f"(patience={ga_patience})."
+                    ),
+                    attempt=attempt_no,
+                    max_attempts=max_attempts,
+                    phase="hybrid",
+                    generation=len(hybrid_history),
+                    total_generations=ga_generations,
+                )
 
             _emit_progress(
                 run_events,
@@ -472,6 +537,7 @@ def generate_and_optimize(
                 ga_pop_size=ga_pop_size,
                 cancel_check=cancel_check,
                 generation_callback=_on_ga_only_generation,
+                early_stop_patience=ga_patience,
             )
             optimized, ga_history = optimized
             _raise_if_cancelled(
@@ -485,6 +551,23 @@ def generate_and_optimize(
             if not ga_only_progress_streamed:
                 for point in ga_history:
                     _on_ga_only_generation(point)
+
+            if len(ga_history) < ga_generations:
+                _emit_progress(
+                    run_events,
+                    progress_callback,
+                    event_type="phase-end",
+                    message=(
+                        f"Attempt {attempt_no}/{max_attempts}: GA early-stopped at "
+                        f"generation {len(ga_history)}/{ga_generations} "
+                        f"(patience={ga_patience})."
+                    ),
+                    attempt=attempt_no,
+                    max_attempts=max_attempts,
+                    phase="ga",
+                    generation=len(ga_history),
+                    total_generations=ga_generations,
+                )
 
             optimized_metrics = circuit_metrics(optimized)
             method_used = "GA"
