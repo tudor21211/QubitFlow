@@ -7,13 +7,14 @@ from typing import Any, Callable, Dict, List, Optional
 from qiskit import QuantumCircuit
 
 import config
-from circuit_optimizer.circuits.generators import random_redundant_circuit
-from circuit_optimizer.cost import circuit_cost, circuit_metrics
+from circuit_optimizer.circuits.generators import random_redundant_circuit, toffoli_chain_circuit
+from circuit_optimizer.cost import circuit_cost, circuit_metrics, fitness
 from circuit_optimizer.equivalence import check_equivalence
 from circuit_optimizer.genetic_algorithm import GeneticAlgorithm
 from circuit_optimizer.hybrid_optimizer import HybridOptimizer
 from circuit_optimizer.representation import copy_circuit
 from circuit_optimizer.rl_agent import RLAgent
+from circuit_optimizer.simplify import identity_based_refinement, simplify
 
 
 class OptimizationCancelled(Exception):
@@ -213,6 +214,43 @@ def _raise_if_cancelled(
         raise OptimizationCancelled("Optimization cancelled by request.")
 
 
+def _build_seeded_circuit(
+    n_qubits: int,
+    depth: int,
+    trial_seed: Optional[int],
+) -> tuple[QuantumCircuit, str]:
+    """Build a circuit for a seed, including special demo seeds."""
+    if trial_seed == config.SEED_TOFFOLI_DEMO:
+        q = max(5, n_qubits)
+        d = max(8, depth // 2)
+        qc = toffoli_chain_circuit(n_qubits=q, depth=d)
+        # Inject deterministic local redundancies to ensure this seed can
+        # demonstrate visible gate-count reduction in short GA runs.
+        for i in range(min(d, q * 2)):
+            a = i % q
+            b = (i + 1) % q
+            qc.h(a)
+            qc.h(a)
+            qc.cx(a, b)
+            qc.cx(a, b)
+        return qc, "toffoli"
+
+    qc = random_redundant_circuit(n_qubits=n_qubits, depth=depth, seed=trial_seed)
+    if trial_seed == config.SEED_IDENTITY_REFINEMENT:
+        # Add deterministic CX-heavy structure that benefits from identity expansion + simplify.
+        q0 = 0
+        q1 = 1 if n_qubits > 1 else 0
+        qc.rz(0.3, q0)
+        qc.cx(q0, q1)
+        qc.rx(-0.2, q0)
+        qc.cx(q0, q1)
+        qc.rz(-0.3, q0)
+        qc.rx(0.2, q0)
+        return qc, "identity"
+
+    return qc, "default"
+
+
 def generate_and_optimize(
     n_qubits: int,
     depth: int,
@@ -245,7 +283,10 @@ def generate_and_optimize(
 
     for attempt in range(max_attempts):
         attempt_no = attempt + 1
-        trial_seed = None if seed is None else seed + attempt
+        if seed in (config.SEED_IDENTITY_REFINEMENT, config.SEED_TOFFOLI_DEMO):
+            trial_seed = seed
+        else:
+            trial_seed = None if seed is None else seed + attempt
         _raise_if_cancelled(
             cancel_check,
             run_events,
@@ -266,7 +307,11 @@ def generate_and_optimize(
             phase="generate",
         )
 
-        original = random_redundant_circuit(n_qubits=n_qubits, depth=depth, seed=trial_seed)
+        original, seed_mode = _build_seeded_circuit(
+            n_qubits=n_qubits,
+            depth=depth,
+            trial_seed=trial_seed,
+        )
         original_metrics = circuit_metrics(original)
         _raise_if_cancelled(
             cancel_check,
@@ -283,11 +328,13 @@ def generate_and_optimize(
             event_type="circuit-generated",
             message=(
                 f"Attempt {attempt_no}/{max_attempts}: generated circuit with "
-                f"{original_metrics['total_gates']} gates and depth {original_metrics['depth']}."
+                f"{original_metrics['total_gates']} gates and depth {original_metrics['depth']} "
+                f"(seed mode: {seed_mode})."
             ),
             attempt=attempt_no,
             max_attempts=max_attempts,
             phase="generate",
+            seed_mode=seed_mode,
             original_metrics=original_metrics,
         )
 
@@ -577,6 +624,26 @@ def generate_and_optimize(
             hybrid_optimized = None
             hybrid_metrics = None
             hybrid_equivalence = None
+
+        if trial_seed == config.SEED_IDENTITY_REFINEMENT:
+            _emit_progress(
+                run_events,
+                progress_callback,
+                event_type="phase-start",
+                message=(
+                    f"Attempt {attempt_no}/{max_attempts}: applying identity-based refinement "
+                    "(expand -> simplify)."
+                ),
+                attempt=attempt_no,
+                max_attempts=max_attempts,
+                phase="identity-refine",
+            )
+            refined = simplify(identity_based_refinement(optimized, fitness_fn=fitness))
+            refined_metrics = circuit_metrics(refined)
+            if refined_metrics["cost"] <= optimized_metrics["cost"]:
+                optimized = refined
+                optimized_metrics = refined_metrics
+                method_used = f"{method_used} + IdentityRefine"
 
         gate_delta = optimized_metrics["total_gates"] - original_metrics["total_gates"]
         attempt_summary = {

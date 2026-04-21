@@ -19,6 +19,8 @@ import pandas as pd
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
+import config
+
 # Streamlit Cloud may execute this file with the app folder as the import base.
 # Ensure repository root is in sys.path so `circuit_optimizer` is importable.
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -469,6 +471,10 @@ def main() -> None:
     if seed_enabled:
         seed_default = defaults.seed if defaults.seed is not None else 7
         seed = st.sidebar.number_input("Seed", min_value=0, value=seed_default, step=1)
+        st.sidebar.caption(
+            f"Special seeds: {config.SEED_IDENTITY_REFINEMENT} (identity refinement), "
+            f"{config.SEED_TOFFOLI_DEMO} (Toffoli-heavy circuit)."
+        )
 
     st.sidebar.header("Optimizer Setup")
     ga_generations = st.sidebar.slider("GA generations", min_value=5, max_value=100, value=defaults.ga_gens)
@@ -660,7 +666,15 @@ def main() -> None:
     if reduced > 0:
         st.success(f"Optimization reduced the circuit by {reduced} gates.")
     elif reduced == 0:
-        st.warning("No gate-count reduction this run. Try a higher depth or more GA generations.")
+        before_cost = float(result.original_metrics.get("cost", 0.0))
+        after_cost = float(result.optimized_metrics.get("cost", 0.0))
+        if after_cost < before_cost:
+            st.info(
+                "Gate count is unchanged, but overall cost improved "
+                f"({before_cost:.4f} -> {after_cost:.4f})."
+            )
+        else:
+            st.warning("No gate-count reduction this run. Try a higher depth or more GA generations.")
     else:
         st.warning("Gate count increased in this run. Cost may still be improved; see the metrics table.")
 
