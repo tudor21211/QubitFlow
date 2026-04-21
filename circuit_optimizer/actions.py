@@ -8,13 +8,16 @@ All rules preserve functional equivalence.
 
 from __future__ import annotations
 
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 
 from qiskit import QuantumCircuit
 from qiskit.converters import circuit_to_dag, dag_to_circuit
 from qiskit.dagcircuit import DAGCircuit, DAGOpNode
 from qiskit.circuit.library import HGate, CXGate, XGate, SwapGate
 import numpy as np
+
+import config
+from circuit_optimizer.toffoli import replace_toffoli_with_best
 
 
 # ───────────────────────────────────────────────────────────────────
@@ -233,7 +236,25 @@ def decompose_swap(qc: QuantumCircuit) -> Optional[QuantumCircuit]:
 
 
 # ───────────────────────────────────────────────────────────────────
-#  7. Merge rotations:  Rz(a) Rz(b) = Rz(a+b)
+#  7. Toffoli decomposition (auto-select variant)
+# ───────────────────────────────────────────────────────────────────
+
+@register
+def decompose_toffoli_best(qc: QuantumCircuit) -> Optional[QuantumCircuit]:
+    """Replace CCX gates with selected decomposition variant."""
+    if qc.count_ops().get("ccx", 0) == 0:
+        return None
+    new_qc, replacements = replace_toffoli_with_best(
+        qc,
+        objective=config.TOFFOLI_SELECTION_OBJECTIVE,
+        allow_relative_phase=config.TOFFOLI_ALLOW_RELATIVE_PHASE,
+        allow_ancilla_auto=config.TOFFOLI_ALLOW_ANCILLA_AUTO,
+    )
+    return new_qc if replacements else None
+
+
+# ───────────────────────────────────────────────────────────────────
+#  8. Merge rotations:  Rz(a) Rz(b) = Rz(a+b)
 # ───────────────────────────────────────────────────────────────────
 
 @register
@@ -258,7 +279,7 @@ def merge_rz_rotations(qc: QuantumCircuit) -> Optional[QuantumCircuit]:
 
 
 # ───────────────────────────────────────────────────────────────────
-#  8. Merge Rx rotations
+#  9. Merge Rx rotations
 # ───────────────────────────────────────────────────────────────────
 
 @register
@@ -283,7 +304,32 @@ def merge_rx_rotations(qc: QuantumCircuit) -> Optional[QuantumCircuit]:
 
 
 # ───────────────────────────────────────────────────────────────────
-#  9. Remove identity rotations (angle ≈ 0)
+#  10. Merge Ry rotations
+# ───────────────────────────────────────────────────────────────────
+
+@register
+def merge_ry_rotations(qc: QuantumCircuit) -> Optional[QuantumCircuit]:
+    """Merge two adjacent Ry gates on the same qubit."""
+    dag = circuit_to_dag(qc)
+    for node in list(dag.topological_op_nodes()):
+        if node not in dag.op_nodes():
+            continue
+        if node.op.name != "ry":
+            continue
+        q_idx = dag.find_bit(node.qargs[0]).index
+        succs = _direct_successors_on_qubit(dag, node, q_idx)
+        for s in succs:
+            if s.op.name == "ry" and _same_qubit(dag, node, s):
+                from qiskit.circuit.library import RYGate
+                angle_sum = float(node.op.params[0]) + float(s.op.params[0])
+                dag.substitute_node(node, RYGate(angle_sum), inplace=True)
+                dag.remove_op_node(s)
+                return dag_to_circuit(dag)
+    return None
+
+
+# ───────────────────────────────────────────────────────────────────
+#  11. Remove identity rotations (angle ≈ 0)
 # ───────────────────────────────────────────────────────────────────
 
 @register
@@ -300,7 +346,7 @@ def remove_identity_rotations(qc: QuantumCircuit) -> Optional[QuantumCircuit]:
 
 
 # ───────────────────────────────────────────────────────────────────
-#  10. Commute single-qubit gate past CX control
+#  12. Commute single-qubit gate past CX control
 # ───────────────────────────────────────────────────────────────────
 
 _Z_FAMILY = {"z", "s", "sdg", "t", "tdg", "rz", "u1"}
@@ -326,7 +372,7 @@ def commute_z_past_cx_control(qc: QuantumCircuit) -> Optional[QuantumCircuit]:
 
 
 # ───────────────────────────────────────────────────────────────────
-#  11. Commute X-family gate past CX target
+#  13. Commute X-family gate past CX target
 # ───────────────────────────────────────────────────────────────────
 
 _X_FAMILY = {"x", "sx", "sxdg", "rx"}
@@ -353,7 +399,7 @@ def commute_x_past_cx_target(qc: QuantumCircuit) -> Optional[QuantumCircuit]:
 #  Helper utilities
 # ───────────────────────────────────────────────────────────────────
 
-def _direct_successors(dag: DAGCircuit, node: DAGOpNode):
+def _direct_successors(dag: DAGCircuit, node: Any):
     """Return DAGOpNode successors that are directly connected."""
     result = []
     for succ in dag.successors(node):
@@ -362,7 +408,7 @@ def _direct_successors(dag: DAGCircuit, node: DAGOpNode):
     return result
 
 
-def _direct_successors_on_qubit(dag: DAGCircuit, node: DAGOpNode, qubit_idx: int):
+def _direct_successors_on_qubit(dag: DAGCircuit, node: Any, qubit_idx: int):
     """Successors that act on the given qubit index."""
     result = []
     for succ in dag.successors(node):
@@ -374,7 +420,7 @@ def _direct_successors_on_qubit(dag: DAGCircuit, node: DAGOpNode, qubit_idx: int
     return result
 
 
-def _same_qargs(dag: DAGCircuit, a: DAGOpNode, b: DAGOpNode) -> bool:
+def _same_qargs(dag: DAGCircuit, a: Any, b: Any) -> bool:
     """Check if two nodes act on exactly the same qubits in the same order."""
     if len(a.qargs) != len(b.qargs):
         return False
@@ -384,20 +430,20 @@ def _same_qargs(dag: DAGCircuit, a: DAGOpNode, b: DAGOpNode) -> bool:
     return True
 
 
-def _same_qubit(dag: DAGCircuit, a: DAGOpNode, b: DAGOpNode) -> bool:
+def _same_qubit(dag: DAGCircuit, a: Any, b: Any) -> bool:
     """Both single-qubit nodes on the same qubit?"""
     if len(a.qargs) != 1 or len(b.qargs) != 1:
         return False
     return dag.find_bit(a.qargs[0]).index == dag.find_bit(b.qargs[0]).index
 
 
-def _are_adjacent(dag: DAGCircuit, a: DAGOpNode, b: DAGOpNode) -> bool:
+def _are_adjacent(dag: DAGCircuit, a: Any, b: Any) -> bool:
     """Check if b is a direct successor of a on any shared qubit."""
     return b in _direct_successors(dag, a)
 
 
 def _swap_two_nodes(qc: QuantumCircuit, dag: DAGCircuit,
-                    a: DAGOpNode, b: DAGOpNode) -> Optional[QuantumCircuit]:
+                    a: Any, b: Any) -> Optional[QuantumCircuit]:
     """Rebuild the circuit with two nodes swapped.
     Simple approach: rebuild from gate list with swapped positions."""
     gate_list = list(dag.topological_op_nodes())

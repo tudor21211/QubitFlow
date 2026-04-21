@@ -7,6 +7,27 @@ ALPHA_DEPTH = 0.3          # weight for circuit depth
 BETA_CNOT = 0.5            # weight for CNOT (CX) gate count
 GAMMA_ERROR = 0.2          # weight for estimated error rate
 
+# Updated fitness (professor requirements):
+# fitness = +w1 * fidelity - w2 * depth - w3 * delay - w4 * gate_count
+FITNESS_W1_FIDELITY = 1.0
+FITNESS_W2_DEPTH = 0.08
+FITNESS_W3_DELAY = 0.08
+FITNESS_W4_GATE_COUNT = 0.04
+
+# Gate-delay model
+DELAY_SINGLE_QUBIT = 1
+DELAY_CNOT = 3
+DELAY_TOFFOLI = 5
+
+# Toffoli decomposition preferences
+TOFFOLI_SELECTION_OBJECTIVE = "depth"   # depth | gate_count | fitness
+TOFFOLI_ALLOW_RELATIVE_PHASE = False
+TOFFOLI_ALLOW_ANCILLA_AUTO = False
+
+# Interactive visualization special seeds
+SEED_IDENTITY_REFINEMENT = 31415
+SEED_TOFFOLI_DEMO = 27182
+
 # ── RL environment ─────────────────────────────────────────────────
 MAX_STEPS_PER_EPISODE = 50  # max rewrite steps per episode
 STAGNATION_LIMIT = 10       # stop after N steps without improvement

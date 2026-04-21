@@ -63,9 +63,13 @@ def plot_cost_comparison(
     """Grouped bar chart: cost for each method on each circuit."""
     _ensure_dir()
     names = [r["name"] for r in results]
-    methods = ["original", "baseline", "ga"]
-    if any(r.get("hybrid") for r in results):
-        methods.append("hybrid")
+    methods = ["original", "qiskit", "ga"]
+    if any(r.get("rl") for r in results):
+        methods.append("rl")
+    if any(r.get("ga_simplify") for r in results):
+        methods.append("ga_simplify")
+    if any(r.get("rl_simplify") for r in results):
+        methods.append("rl_simplify")
 
     x = np.arange(len(names))
     width = 0.18
@@ -78,7 +82,7 @@ def plot_cost_comparison(
                 vals.append(r[m]["cost"])
             else:
                 vals.append(0)
-        ax.bar(x + i * width, vals, width, label=m.capitalize())
+        ax.bar(x + i * width, vals, width, label=m.replace("_", " ").title())
 
     ax.set_xticks(x + width * (len(methods) - 1) / 2)
     ax.set_xticklabels(names, rotation=30, ha="right")
@@ -104,9 +108,13 @@ def plot_depth_comparison(
     """Bar chart of circuit depth per method."""
     _ensure_dir()
     names = [r["name"] for r in results]
-    methods = ["original", "baseline", "ga"]
-    if any(r.get("hybrid") for r in results):
-        methods.append("hybrid")
+    methods = ["original", "qiskit", "ga"]
+    if any(r.get("rl") for r in results):
+        methods.append("rl")
+    if any(r.get("ga_simplify") for r in results):
+        methods.append("ga_simplify")
+    if any(r.get("rl_simplify") for r in results):
+        methods.append("rl_simplify")
 
     x = np.arange(len(names))
     width = 0.18
@@ -119,7 +127,7 @@ def plot_depth_comparison(
                 vals.append(r[m]["depth"])
             else:
                 vals.append(0)
-        ax.bar(x + i * width, vals, width, label=m.capitalize())
+        ax.bar(x + i * width, vals, width, label=m.replace("_", " ").title())
 
     ax.set_xticks(x + width * (len(methods) - 1) / 2)
     ax.set_xticklabels(names, rotation=30, ha="right")
@@ -145,9 +153,13 @@ def plot_cx_comparison(
     """Bar chart of CX gate count per method."""
     _ensure_dir()
     names = [r["name"] for r in results]
-    methods = ["original", "baseline", "ga"]
-    if any(r.get("hybrid") for r in results):
-        methods.append("hybrid")
+    methods = ["original", "qiskit", "ga"]
+    if any(r.get("rl") for r in results):
+        methods.append("rl")
+    if any(r.get("ga_simplify") for r in results):
+        methods.append("ga_simplify")
+    if any(r.get("rl_simplify") for r in results):
+        methods.append("rl_simplify")
 
     x = np.arange(len(names))
     width = 0.18
@@ -160,7 +172,7 @@ def plot_cx_comparison(
                 vals.append(r[m]["cx_count"])
             else:
                 vals.append(0)
-        ax.bar(x + i * width, vals, width, label=m.capitalize())
+        ax.bar(x + i * width, vals, width, label=m.replace("_", " ").title())
 
     ax.set_xticks(x + width * (len(methods) - 1) / 2)
     ax.set_xticklabels(names, rotation=30, ha="right")
@@ -195,12 +207,12 @@ def plot_stability(
     ga_std = [r["ga"].get("std_cost", 0) for r in results]
     ax.bar(x - width / 2, ga_avg, width, yerr=ga_std, label="GA", capsize=4)
 
-    if any(r.get("hybrid") for r in results):
-        h_avg = [r["hybrid"].get("avg_cost", r["hybrid"]["cost"])
-                 if r.get("hybrid") else 0 for r in results]
-        h_std = [r["hybrid"].get("std_cost", 0)
-                 if r.get("hybrid") else 0 for r in results]
-        ax.bar(x + width / 2, h_avg, width, yerr=h_std, label="Hybrid", capsize=4)
+    if any(r.get("rl") for r in results):
+        h_avg = [r["rl"].get("avg_cost", r["rl"]["cost"])
+                 if r.get("rl") else 0 for r in results]
+        h_std = [r["rl"].get("std_cost", 0)
+                 if r.get("rl") else 0 for r in results]
+        ax.bar(x + width / 2, h_avg, width, yerr=h_std, label="RL", capsize=4)
 
     ax.set_xticks(x)
     ax.set_xticklabels(names, rotation=30, ha="right")
@@ -227,9 +239,13 @@ def plot_improvement_heatmap(
     method × circuit."""
     _ensure_dir()
     names = [r["name"] for r in results]
-    methods = ["baseline", "ga"]
-    if any(r.get("hybrid") for r in results):
-        methods.append("hybrid")
+    methods = ["qiskit", "ga"]
+    if any(r.get("rl") for r in results):
+        methods.append("rl")
+    if any(r.get("ga_simplify") for r in results):
+        methods.append("ga_simplify")
+    if any(r.get("rl_simplify") for r in results):
+        methods.append("rl_simplify")
 
     data = np.zeros((len(methods), len(names)))
     for j, r in enumerate(results):

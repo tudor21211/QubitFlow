@@ -1,12 +1,4 @@
-"""
-Benchmarking harness.
-
-Compares four approaches on a suite of test circuits:
-  1. Original (no optimisation)
-  2. Qiskit transpiler baseline
-  3. GA only
-  4. Hybrid GA + RL
-"""
+"""Benchmarking harness for GA/RL/Qiskit comparisons."""
 
 from __future__ import annotations
 
@@ -20,10 +12,11 @@ import config
 from circuit_optimizer.baseline import transpile_baseline
 from circuit_optimizer.cost import circuit_cost, circuit_metrics
 from circuit_optimizer.genetic_algorithm import GeneticAlgorithm
-from circuit_optimizer.hybrid_optimizer import HybridOptimizer
 from circuit_optimizer.rl_agent import RLAgent
 from circuit_optimizer.representation import copy_circuit
 from circuit_optimizer.equivalence import check_equivalence, format_equivalence_result
+from circuit_optimizer.simplify import simplify, identity_based_refinement
+from circuit_optimizer.cost import fitness
 
 
 def benchmark_single(
@@ -50,17 +43,17 @@ def benchmark_single(
               f"depth={orig_metrics['depth']}  cx={orig_metrics['cx_count']}  "
               f"gates={orig_metrics['total_gates']}")
 
-    # ── 2. Qiskit baseline ─────────────────────────────────────
+    # ── 2. Qiskit baseline / direct Qiskit optimisation ────────
     t0 = time.time()
     base_qc = transpile_baseline(qc, optimization_level=3)
     base_time = time.time() - t0
     base_m = circuit_metrics(base_qc)
     base_m["time_s"] = base_time
     base_m["equivalence"] = check_equivalence(qc, base_qc)
-    results["baseline"] = base_m
+    results["qiskit"] = base_m
     if verbose:
         eq_line = format_equivalence_result(base_m["equivalence"])
-        print(f"  Baseline cost:  {base_m['cost']:.4f}  "
+        print(f"  Qiskit cost:    {base_m['cost']:.4f}  "
               f"depth={base_m['depth']}  cx={base_m['cx_count']}  "
               f"time={base_time:.2f}s  equiv={eq_line}")
 
@@ -100,50 +93,63 @@ def benchmark_single(
               f"(avg={ga_m['avg_cost']:.4f} +/- {ga_m['std_cost']:.4f})  "
               f"time={ga_m['avg_time_s']:.2f}s  equiv={eq_line}")
 
-    # ── 4. Hybrid GA + RL ──────────────────────────────────────
+    # ── 4. RL only ──────────────────────────────────────────────
     if rl_agent is not None and rl_agent.model is not None:
-        hybrid_costs = []
-        hybrid_times = []
-        best_hybrid_qc = None
-        best_hybrid_cost = np.inf
+        rl_costs = []
+        rl_times = []
+        best_rl_qc = None
+        best_rl_cost = np.inf
 
         for r in range(runs):
             t0 = time.time()
-            hybrid = HybridOptimizer(
-                circuit_fn=circuit_fn,
-                rl_agent=rl_agent,
-                generations=ga_generations,
-                pop_size=ga_pop_size,
-                verbose=False,
-            )
-            h_qc, _ = hybrid.run()
-            # Also do RL polish
-            polished = rl_agent.optimize(h_qc)
-            if circuit_cost(polished) < circuit_cost(h_qc):
-                h_qc = polished
+            h_qc = rl_agent.optimize(copy_circuit(qc))
             elapsed = time.time() - t0
             c = circuit_cost(h_qc)
-            hybrid_costs.append(c)
-            hybrid_times.append(elapsed)
-            if c < best_hybrid_cost:
-                best_hybrid_cost = c
-                best_hybrid_qc = h_qc
+            rl_costs.append(c)
+            rl_times.append(elapsed)
+            if c < best_rl_cost:
+                best_rl_cost = c
+                best_rl_qc = h_qc
 
-        hybrid_m = circuit_metrics(best_hybrid_qc)
-        hybrid_m["avg_cost"] = float(np.mean(hybrid_costs))
-        hybrid_m["std_cost"] = float(np.std(hybrid_costs))
-        hybrid_m["avg_time_s"] = float(np.mean(hybrid_times))
-        hybrid_m["equivalence"] = check_equivalence(qc, best_hybrid_qc)
-        results["hybrid"] = hybrid_m
+        rl_m = circuit_metrics(best_rl_qc)
+        rl_m["avg_cost"] = float(np.mean(rl_costs))
+        rl_m["std_cost"] = float(np.std(rl_costs))
+        rl_m["avg_time_s"] = float(np.mean(rl_times))
+        rl_m["equivalence"] = check_equivalence(qc, best_rl_qc)
+        results["rl"] = rl_m
         if verbose:
-            eq_line = format_equivalence_result(hybrid_m["equivalence"])
-            print(f"  Hybrid cost:    {hybrid_m['cost']:.4f}  "
-                  f"(avg={hybrid_m['avg_cost']:.4f} +/- {hybrid_m['std_cost']:.4f})  "
-                  f"time={hybrid_m['avg_time_s']:.2f}s  equiv={eq_line}")
+            eq_line = format_equivalence_result(rl_m["equivalence"])
+            print(f"  RL cost:        {rl_m['cost']:.4f}  "
+                  f"(avg={rl_m['avg_cost']:.4f} +/- {rl_m['std_cost']:.4f})  "
+                  f"time={rl_m['avg_time_s']:.2f}s  equiv={eq_line}")
     else:
-        results["hybrid"] = None
+        results["rl"] = None
         if verbose:
-            print("  Hybrid: skipped (no trained RL agent)")
+            print("  RL: skipped (no trained RL agent)")
+
+    # ── 5. GA + Simplify (expand -> simplify) ───────────────────
+    ga_refined_qc = simplify(identity_based_refinement(best_ga_qc, fitness_fn=fitness))
+    ga_s_m = circuit_metrics(ga_refined_qc)
+    ga_s_m["equivalence"] = check_equivalence(qc, ga_refined_qc)
+    results["ga_simplify"] = ga_s_m
+    if verbose:
+        eq_line = format_equivalence_result(ga_s_m["equivalence"])
+        print(f"  GA+Simplify:    {ga_s_m['cost']:.4f}  depth={ga_s_m['depth']}  "
+              f"delay={ga_s_m['delay']}  gates={ga_s_m['total_gates']}  equiv={eq_line}")
+
+    # ── 6. RL + Simplify (expand -> simplify) ───────────────────
+    if results["rl"] is not None:
+        rl_base_qc = best_rl_qc
+        rl_refined_qc = simplify(identity_based_refinement(rl_base_qc, fitness_fn=fitness))
+        rl_s_m = circuit_metrics(rl_refined_qc)
+        rl_s_m["equivalence"] = check_equivalence(qc, rl_refined_qc)
+        results["rl_simplify"] = rl_s_m
+        if verbose:
+            eq_line = format_equivalence_result(rl_s_m["equivalence"])
+            print(f"  RL+Simplify:    {rl_s_m['cost']:.4f}  depth={rl_s_m['depth']}  "
+                  f"delay={rl_s_m['delay']}  gates={rl_s_m['total_gates']}  equiv={eq_line}")
+    else:
+        results["rl_simplify"] = None
 
     return results
 
@@ -179,36 +185,40 @@ def benchmark_suite(
 
 
 def print_summary_table(results: List[Dict]):
-    """Print a compact text comparison table."""
-    header = (f"{'Circuit':<20} | {'Original':>10} | {'Baseline':>10} | "
-              f"{'GA':>10} | {'Hybrid':>10} | "
-              f"{'Baseline Eq':>11} | {'GA Eq':>5} | {'Hybrid Eq':>9}")
+    """Print final comparison table required by the project brief."""
+    header = (
+        f"{'Circuit':<18} | {'Method':<12} | {'Fidelity':>8} | {'Depth':>5} | "
+        f"{'Delay':>5} | {'Gates':>5} | {'Eq':>4}"
+    )
     print("\n" + "=" * len(header))
-    print("  COST COMPARISON  (lower is better)  +  EQUIVALENCE")
+    print("  FINAL COMPARISON")
     print("=" * len(header))
     print(header)
     print("-" * len(header))
 
     for r in results:
-        orig = f"{r['original']['cost']:.2f}"
-        base = f"{r['baseline']['cost']:.2f}"
-        ga = f"{r['ga']['cost']:.2f}"
-        hyb = f"{r['hybrid']['cost']:.2f}" if r.get("hybrid") else "N/A"
+        ordered = [
+            ("ga", "GA"),
+            ("rl", "RL"),
+            ("ga_simplify", "GA+Simplify"),
+            ("rl_simplify", "RL+Simplify"),
+            ("qiskit", "Qiskit"),
+        ]
 
-        def _eq_flag(method_key: str) -> str:
-            entry = r.get(method_key)
-            if not entry:
-                return "N/A"
+        first_line = True
+        for key, label in ordered:
+            entry = r.get(key)
+            if entry is None:
+                continue
             eq = entry.get("equivalence")
-            if eq is None:
-                return "N/A"
-            return "PASS" if eq["is_equivalent"] else "FAIL"
-
-        base_eq = _eq_flag("baseline")
-        ga_eq = _eq_flag("ga")
-        hyb_eq = _eq_flag("hybrid")
-
-        print(f"{r['name']:<20} | {orig:>10} | {base:>10} | {ga:>10} | {hyb:>10} | "
-              f"{base_eq:>11} | {ga_eq:>5} | {hyb_eq:>9}")
+            eq_flag = "PASS" if eq and eq.get("is_equivalent", False) else "FAIL"
+            circuit_name = r["name"] if first_line else ""
+            print(
+                f"{circuit_name:<18} | {label:<12} | {entry['fidelity']:>8.4f} | "
+                f"{entry['depth']:>5} | {entry['delay']:>5} | "
+                f"{entry['total_gates']:>5} | {eq_flag:>4}"
+            )
+            first_line = False
+        print("-" * len(header))
 
     print("=" * len(header))

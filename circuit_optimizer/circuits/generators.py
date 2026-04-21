@@ -57,12 +57,17 @@ def random_redundant_circuit(
             q = rng.randint(0, n_qubits - 1)
             qc.h(q)
             qc.h(q)
-        elif r < 0.90:
+        elif r < 0.88:
             # Deliberate CX-CX redundancy
             if n_qubits >= 2:
                 q0, q1 = rng.sample(range(n_qubits), 2)
                 qc.cx(q0, q1)
                 qc.cx(q0, q1)
+        elif r < 0.95:
+            # Toffoli insertion for 3+-qubit experiments
+            if n_qubits >= 3:
+                q0, q1, q2 = rng.sample(range(n_qubits), 3)
+                qc.ccx(q0, q1, q2)
         else:
             # H-X-H sandwich (= Z)
             q = rng.randint(0, n_qubits - 1)
@@ -116,6 +121,20 @@ def grover_like_circuit(n_qubits: int = 3) -> QuantumCircuit:
     return qc
 
 
+def toffoli_chain_circuit(n_qubits: int = 5, depth: int = 8) -> QuantumCircuit:
+    """Circuit with repeated Toffoli gates and entangling structure."""
+    qc = QuantumCircuit(n_qubits)
+    for i in range(depth):
+        a = i % n_qubits
+        b = (i + 1) % n_qubits
+        c = (i + 2) % n_qubits
+        qc.h(a)
+        qc.ccx(a, b, c)
+        qc.cx(c, b)
+        qc.rz(np.pi / 8, a)
+    return qc
+
+
 def all_test_circuits() -> List[dict]:
     """
     Return a list of ``{name, circuit}`` dicts for benchmarking.
@@ -124,6 +143,7 @@ def all_test_circuits() -> List[dict]:
         {"name": "random_4q_d20", "circuit": random_redundant_circuit(4, 20, seed=0)},
         {"name": "random_4q_d40", "circuit": random_redundant_circuit(4, 40, seed=1)},
         {"name": "random_6q_d30", "circuit": random_redundant_circuit(6, 30, seed=2)},
+        {"name": "toffoli_chain_5q", "circuit": toffoli_chain_circuit(5, 10)},
         {"name": "qft_4", "circuit": qft_circuit(4)},
         {"name": "qft_6", "circuit": qft_circuit(6)},
         {"name": "variational_4q", "circuit": variational_circuit(4, 2, seed=42)},
